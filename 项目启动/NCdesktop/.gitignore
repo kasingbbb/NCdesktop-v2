@@ -1,0 +1,30 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+target/
+
+# Tauri 生成文件
+src-tauri/target/
+src-tauri/WixTools/
+src-tauri/gen/
+
+# 环境变量
+.env
+.env.local
+*.local
+
+# IDE
+.vscode/
+!.vscode/extensions.json
+.idea/
+
+# 系统文件
+*.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+npm-debug.log*
+pnpm-debug.log*

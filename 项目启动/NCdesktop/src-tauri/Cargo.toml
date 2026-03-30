@@ -1,0 +1,38 @@
+[package]
+name = "notecapt"
+version = "0.1.0"
+description = "NoteCapt Desktop — 多模态知识采集终端的桌面控制中枢"
+authors = ["钟嘉澄"]
+license = "MIT"
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.34", features = ["bundled"] }
+dirs-next = "2"
+notify = "8"
+walkdir = "2"
+symphonia = { version = "0.5", features = ["mp3", "aac", "isomp4", "wav", "pcm"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+futures-util = "0.3"
+tauri = { version = "2", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-shell = "2"
+tokio = { version = "1.50.0", features = ["time"] }
+
+[dev-dependencies]
+env_logger = "0.11"
+tempfile = "3"
