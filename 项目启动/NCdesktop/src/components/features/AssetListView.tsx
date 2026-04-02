@@ -1,12 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FileText, Image, Music, File, FolderOpen } from "lucide-react";
 import { useAssetStore } from "../../stores/assetStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTagStore } from "../../stores/tagStore";
 import { useUIStore } from "../../stores/uiStore";
 import { useResizable } from "../../hooks/useResizable";
+import { useRubberBandSelect } from "../../hooks/useRubberBandSelect";
+import { useDragAssets } from "../../hooks/useDragAssets";
 import { ResizeHandle } from "../layout/ResizeHandle";
 import { WorkspaceFolderStrip } from "./WorkspaceFolderStrip";
+import { SelectionOverlay } from "./assets/SelectionOverlay";
+import { BatchToolbar } from "./assets/BatchToolbar";
 import type { Asset, WorkspaceFolderEntry } from "../../types";
 import {
   getProjectWorkspaceRoot,
@@ -118,8 +122,51 @@ export function AssetListView() {
     error,
     selectAsset,
     selectedAssetId,
+    selectedAssetIds,
+    setSelectedAssetIds,
+    toggleSelectAsset,
+    clearSelection,
     viewMode,
   } = useAssetStore();
+  const setViewerAssetId = useUIStore((s) => s.setViewerAssetId);
+
+  // 右栏：框选容器 ref
+  const rightPaneRef = useRef<HTMLDivElement>(null);
+  // 卡片 ref map：id → DOM 元素
+  const cardRefsRef = useRef<Map<string, HTMLElement>>(new Map());
+
+  const getItemRects = useCallback(() => {
+    const result: Array<{ id: string; rect: DOMRect }> = [];
+    cardRefsRef.current.forEach((el, id) => {
+      result.push({ id, rect: el.getBoundingClientRect() });
+    });
+    return result;
+  }, []);
+
+  const { selectionRect } = useRubberBandSelect({
+    containerRef: rightPaneRef,
+    getItemRects,
+    onSelectionChange: setSelectedAssetIds,
+  });
+
+  const { makeDragProps } = useDragAssets(selectedAssetIds);
+
+  // Cmd+A 全选；Esc 清空选择
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) return;
+      if (e.key === "Escape") clearSelection();
+      if ((e.metaKey || e.ctrlKey) && e.key === "a") {
+        e.preventDefault();
+        useAssetStore.getState().selectAllAssets();
+      }
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [clearSelection]);
   const activeProject = useProjectStore((s) => s.getActiveProject());
   const assetTagFilterId = useUIStore((s) => s.assetTagFilterId);
   const setAssetTagFilterId = useUIStore((s) => s.setAssetTagFilterId);
@@ -195,6 +242,22 @@ export function AssetListView() {
       void fetchTags();
     }
   }, [assetTagFilterId, fetchTags]);
+
+  // Space: quick-look 已选素材；Enter: 全屏阅读器
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) return;
+      if ((e.key === " " || e.key === "Enter") && selectedAssetId) {
+        e.preventDefault();
+        setViewerAssetId(selectedAssetId);
+      }
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [selectedAssetId, setViewerAssetId]);
 
   if (isLoading) {
     return (
@@ -277,6 +340,7 @@ export function AssetListView() {
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden p-[var(--space-4)]">
       {filterBanner}
       {folderFilterBanner}
+      <BatchToolbar selectedIds={selectedAssetIds} />
 
       <WorkspaceFolderStrip
         folders={workspaceFolders}
@@ -327,6 +391,7 @@ export function AssetListView() {
                       <button
                         type="button"
                         onClick={() => selectAsset(a.id)}
+                        onDoubleClick={() => setViewerAssetId(a.id)}
                         className="w-full text-left px-3 py-2.5 flex items-start gap-2 rounded-[var(--radius-md)] border border-app transition-colors hover:border-[var(--border-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--border-active)] bg-[var(--surface-primary)]"
                         style={{
                           background: active ? "var(--sidebar-active-bg)" : undefined,
@@ -357,6 +422,7 @@ export function AssetListView() {
                       key={a.id}
                       type="button"
                       onClick={() => selectAsset(a.id)}
+                      onDoubleClick={() => setViewerAssetId(a.id)}
                       className="flex flex-col items-center gap-1.5 rounded-[var(--radius-md)] border border-app p-2 transition-colors hover:border-[var(--border-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-active)] bg-[var(--surface-primary)]"
                       style={{
                         background: active ? "var(--sidebar-active-bg)" : undefined,
@@ -380,7 +446,7 @@ export function AssetListView() {
         <ResizeHandle onMouseDown={leftPane.handleMouseDown} isResizing={leftPane.isResizing} />
 
         {/* 右：工作区（重命名 + 标签 + 归类目录） */}
-        <div className="flex-1 min-w-0 flex flex-col min-h-0">
+        <div ref={rightPaneRef} className="flex-1 min-w-0 flex flex-col min-h-0 relative">
           <div className="px-3 py-2 border-b shrink-0 border-app bg-[var(--surface-tertiary)]">
             <p className="text-[var(--text-sm)] font-semibold" style={{ color: "var(--text-primary)" }}>
               工作区
@@ -389,22 +455,37 @@ export function AssetListView() {
               应用目录内副本的展示名、AI 标签与整理子目录（点击与左侧同一素材联动）
             </p>
           </div>
-          <div className="flex-1 min-h-0 overflow-y-auto bg-[var(--surface-primary)]">
+          <div className="flex-1 min-h-0 overflow-y-auto bg-[var(--surface-primary)] relative">
+            <SelectionOverlay rect={selectionRect} />
             {viewMode === "list" ? (
               <ul className="flex flex-col gap-2 p-2">
                 {displayAssets.map((a) => {
                   const active = selectedAssetId === a.id;
+                  const multiSelected = selectedAssetIds.has(a.id);
                   const tagNames = assetTagNamesById[a.id] ?? [];
                   const cat = inferOrganizedCategory(a.filePath);
                   const renamed = a.name.trim() !== originalDisplayName(a).trim();
                   return (
-                    <li key={a.id}>
+                    <li key={a.id} ref={(el) => { if (el) cardRefsRef.current.set(a.id, el); else cardRefsRef.current.delete(a.id); }}>
                       <button
                         type="button"
-                        onClick={() => selectAsset(a.id)}
+                        {...makeDragProps(a.id)}
+                        onClick={(e) => {
+                          if (e.metaKey || e.ctrlKey) {
+                            toggleSelectAsset(a.id);
+                          } else {
+                            selectAsset(a.id);
+                          }
+                        }}
                         className="w-full text-left px-3 py-2.5 flex items-start gap-2 rounded-[var(--radius-md)] border border-app transition-colors hover:border-[var(--border-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--border-active)] bg-[var(--surface-primary)]"
                         style={{
-                          background: active ? "var(--sidebar-active-bg)" : undefined,
+                          background: multiSelected
+                            ? "rgba(31,69,110,0.08)"
+                            : active
+                            ? "var(--sidebar-active-bg)"
+                            : undefined,
+                          outline: multiSelected ? "2px solid var(--brand-navy)" : undefined,
+                          outlineOffset: "-2px",
                         }}
                       >
                         <span className="shrink-0 mt-0.5">{assetIcon(a, 18)}</span>
@@ -446,17 +527,33 @@ export function AssetListView() {
               <div className="p-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {displayAssets.map((a) => {
                   const active = selectedAssetId === a.id;
+                  const multiSelected = selectedAssetIds.has(a.id);
                   const tagNames = assetTagNamesById[a.id] ?? [];
                   const cat = inferOrganizedCategory(a.filePath);
                   const renamed = a.name.trim() !== originalDisplayName(a).trim();
                   return (
                     <button
                       key={a.id}
+                      ref={(el) => { if (el) cardRefsRef.current.set(a.id, el); else cardRefsRef.current.delete(a.id); }}
                       type="button"
-                      onClick={() => selectAsset(a.id)}
+                      {...makeDragProps(a.id)}
+                      onClick={(e) => {
+                        if (e.metaKey || e.ctrlKey) {
+                          toggleSelectAsset(a.id);
+                        } else {
+                          selectAsset(a.id);
+                        }
+                      }}
+                      onDoubleClick={() => setViewerAssetId(a.id)}
                       className="flex flex-col items-center gap-1 rounded-[var(--radius-md)] border border-app p-2 transition-colors hover:border-[var(--border-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-active)] bg-[var(--surface-primary)]"
                       style={{
-                        background: active ? "var(--sidebar-active-bg)" : undefined,
+                        background: multiSelected
+                          ? "rgba(31,69,110,0.08)"
+                          : active
+                          ? "var(--sidebar-active-bg)"
+                          : undefined,
+                        outline: multiSelected ? "2px solid var(--brand-navy)" : undefined,
+                        outlineOffset: "-2px",
                       }}
                     >
                       <div className="w-14 h-14 rounded-[var(--radius-md)] flex items-center justify-center shrink-0 bg-[var(--surface-tertiary)]">

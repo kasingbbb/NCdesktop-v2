@@ -4,12 +4,14 @@ import { listen } from "@tauri-apps/api/event";
 import { SidebarSection } from "../layout/SidebarItem";
 import { useProjectStore } from "../../stores/projectStore";
 import { useUIStore } from "../../stores/uiStore";
+import { useAssetStore } from "../../stores/assetStore";
 import {
   listProjectWorkspaceFolders,
   revealProjectWorkspaceFolder,
 } from "../../lib/tauri-commands";
 import type { WorkspaceFolderEntry } from "../../types";
 import { workspaceFolderKindBadge } from "../../lib/workspace-folder-badges";
+import { DRAG_ASSET_TYPE, type DragAssetPayload } from "../../hooks/useDragAssets";
 
 export function ProjectTree() {
   const { projects, activeProjectId, setActiveProject } = useProjectStore();
@@ -19,12 +21,16 @@ export function ProjectTree() {
   );
   const setSidebarSection = useUIStore((s) => s.setSidebarSection);
 
+  const { moveAssets, copyAssets } = useAssetStore();
+  const addNotification = useUIStore((s) => s.addNotification);
+
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const [foldersByProject, setFoldersByProject] = useState<
     Record<string, WorkspaceFolderEntry[]>
   >({});
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
   const [folderRefreshTick, setFolderRefreshTick] = useState(0);
+  const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
 
   const loadFolders = useCallback(async (projectId: string) => {
     setLoadingProjectId(projectId);
@@ -89,6 +95,70 @@ export function ProjectTree() {
     [setActiveProject, setWorkspaceFolderRelativePath, setSidebarSection]
   );
 
+  const handleDragOver = useCallback(
+    (e: React.DragEvent, projectId: string) => {
+      if (!e.dataTransfer.types.includes(DRAG_ASSET_TYPE)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = e.altKey ? "copy" : "move";
+      setDragOverProjectId(projectId);
+    },
+    []
+  );
+
+  const handleDragLeave = useCallback(
+    (e: React.DragEvent) => {
+      // Only clear if leaving the project button itself (not a child)
+      if ((e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) return;
+      setDragOverProjectId(null);
+    },
+    []
+  );
+
+  const handleDrop = useCallback(
+    async (e: React.DragEvent, targetProjectId: string) => {
+      e.preventDefault();
+      setDragOverProjectId(null);
+      const raw = e.dataTransfer.getData(DRAG_ASSET_TYPE);
+      if (!raw) return;
+      let payload: DragAssetPayload;
+      try {
+        payload = JSON.parse(raw) as DragAssetPayload;
+      } catch {
+        return;
+      }
+      const { assetIds } = payload;
+      if (!assetIds.length) return;
+      const isCopy = e.altKey;
+      try {
+        if (isCopy) {
+          await copyAssets(assetIds, targetProjectId);
+          addNotification({
+            type: "success",
+            title: "复制成功",
+            message: `已将 ${assetIds.length} 个素材复制到目标项目`,
+            duration: 2500,
+          });
+        } else {
+          await moveAssets(assetIds, targetProjectId);
+          addNotification({
+            type: "success",
+            title: "移动成功",
+            message: `已将 ${assetIds.length} 个素材移动到目标项目`,
+            duration: 2500,
+          });
+        }
+      } catch (err) {
+        addNotification({
+          type: "error",
+          title: isCopy ? "复制失败" : "移动失败",
+          message: String(err),
+          duration: 4000,
+        });
+      }
+    },
+    [moveAssets, copyAssets, addNotification]
+  );
+
   return (
     <SidebarSection title="Projects">
       {projects.length === 0 ? (
@@ -123,7 +193,15 @@ export function ProjectTree() {
                   className={`sidebar-item flex-1 min-w-0 flex items-center mb-0 ${
                     projectHighlighted ? "active" : ""
                   }`}
+                  style={
+                    dragOverProjectId === project.id
+                      ? { background: "rgba(31,69,110,0.12)", outline: "2px solid var(--brand-navy)", outlineOffset: "-2px" }
+                      : undefined
+                  }
                   onClick={() => openProject(project.id, null)}
+                  onDragOver={(e) => handleDragOver(e, project.id)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => void handleDrop(e, project.id)}
                 >
                   <span className="sidebar-item-icon mr-2 shrink-0">
                     <FolderOpen size={16} />

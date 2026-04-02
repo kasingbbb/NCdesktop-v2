@@ -12,6 +12,7 @@ import { useLibraryStore } from "./stores/libraryStore";
 import { useProjectStore } from "./stores/projectStore";
 import { useAssetStore } from "./stores/assetStore";
 import { logger } from "./utils/logger";
+import { DocumentViewer } from "./components/features/viewer/DocumentViewer";
 
 interface ImportDropFinishedPayload {
   projectId: string;
@@ -31,6 +32,8 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const toggleInspector = useUIStore((s) => s.toggleInspector);
+  const viewerAssetId = useUIStore((s) => s.viewerAssetId);
+  const setViewerAssetId = useUIStore((s) => s.setViewerAssetId);
   const activeLibraryId = useLibraryStore((s) => s.activeLibraryId);
   const ensureActiveLibrary = useLibraryStore((s) => s.ensureActiveLibrary);
   const createProject = useProjectStore((s) => s.createProject);
@@ -113,6 +116,13 @@ export default function App() {
         onSettingsOpen={() => setSettingsOpen(true)}
         onSearchOpen={handleSearchOpen}
       />
+
+      {viewerAssetId && (
+        <DocumentViewer
+          assetId={viewerAssetId}
+          onClose={() => setViewerAssetId(null)}
+        />
+      )}
 
       <Suspense fallback={null}>
         {searchOpen && (

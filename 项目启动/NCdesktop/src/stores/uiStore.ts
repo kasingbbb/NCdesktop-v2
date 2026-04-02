@@ -74,6 +74,7 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   assetTagFilterId: null,
   workspaceFolderRelativePath: null,
+  viewerAssetId: null,
 
   setLayoutMode: (mode) => set({ layoutMode: mode }),
 
@@ -126,4 +127,6 @@ export const useUIStore = create<UIStore>((set) => ({
 
   setWorkspaceFolderRelativePath: (path) =>
     set({ workspaceFolderRelativePath: path }),
+
+  setViewerAssetId: (id) => set({ viewerAssetId: id }),
 }));
