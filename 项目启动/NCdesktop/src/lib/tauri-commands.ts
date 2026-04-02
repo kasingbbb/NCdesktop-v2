@@ -125,6 +125,24 @@ export async function getAssetAnalysis(assetId: string): Promise<AIAnalysis | nu
   return invoke<AIAnalysis | null>("get_asset_analysis", { assetId });
 }
 
+export async function moveAssets(
+  assetIds: string[],
+  targetProjectId: string
+): Promise<Asset[]> {
+  return invoke<Asset[]>("move_assets", { assetIds, targetProjectId });
+}
+
+export async function copyAssets(
+  assetIds: string[],
+  targetProjectId: string
+): Promise<Asset[]> {
+  return invoke<Asset[]>("copy_assets", { assetIds, targetProjectId });
+}
+
+export async function getFileContent(filePath: string): Promise<string> {
+  return invoke<string>("get_file_content", { filePath });
+}
+
 // ── Timeline ───────────────────────────────────────
 
 export async function getTimeline(projectId: string): Promise<Timeline | null> {

@@ -30,6 +30,8 @@ interface UIStore {
   assetTagFilterId: string | null;
   /** 工作区子文件夹筛选：`null` 为全部；`__ROOT__` 为项目根目录下直接文件 */
   workspaceFolderRelativePath: string | null;
+  /** 全屏阅读器打开的素材 ID */
+  viewerAssetId: string | null;
 
   setLayoutMode: (mode: LayoutMode) => void;
   setSidebarSection: (section: SidebarSection) => void;
@@ -45,6 +47,7 @@ interface UIStore {
   setMagicMoment: (partial: Partial<MagicMomentState>) => void;
   setAssetTagFilterId: (tagId: string | null) => void;
   setWorkspaceFolderRelativePath: (path: string | null) => void;
+  setViewerAssetId: (id: string | null) => void;
 }
 
 let notificationId = 0;

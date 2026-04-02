@@ -113,6 +113,21 @@ pub fn update_name_and_path(
     Ok(())
 }
 
+/// 移动素材到另一个项目：更新 project_id 与磁盘路径
+pub fn update_project_and_path(
+    conn: &Connection,
+    id: &str,
+    project_id: &str,
+    file_path: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE assets SET project_id = ?2, file_path = ?3 WHERE id = ?1",
+        params![id, project_id, file_path],
+    )
+    .map_err(|e| format!("移动素材失败: {e}"))?;
+    Ok(())
+}
+
 pub fn delete(conn: &Connection, id: &str) -> Result<(), String> {
     conn.execute("DELETE FROM assets WHERE id = ?1", params![id])
         .map_err(|e| format!("删除素材失败: {e}"))?;

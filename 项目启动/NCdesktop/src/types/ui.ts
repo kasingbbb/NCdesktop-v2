@@ -53,6 +53,7 @@ export type ModalType =
   | "asset_detail"
   | "confirm_delete"
   | "about"
+  | "document_viewer"
   | null;
 
 /** 通知项 */
