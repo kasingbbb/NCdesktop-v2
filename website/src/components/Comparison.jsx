@@ -2,160 +2,155 @@ import React from 'react';
 
 const comparisons = [
   {
-    before: '手机录音 → 忘记整理 → 永远不听',
-    after: '自动转文字+分类，随时可搜',
+    before: 'Record on phone → forget to organize → never listen again',
+    after: 'Auto-transcribed and tagged — searchable any time',
     icon: '🎙️'
   },
   {
-    before: '拍照笔记 → 散落相册 → 找不到',
-    after: '照片锚定录音，上下文完整',
+    before: 'Photo notes → buried in camera roll → impossible to find',
+    after: 'Photos anchored to audio timeline — full context preserved',
     icon: '📸'
   },
   {
-    before: '各种笔记APP → 信息孤岛 → 拼素材崩溃',
-    after: '统一管理，一键导出到AI',
+    before: 'Multiple note apps → information silos → chaotic assembly',
+    after: 'Unified library — one-click export to any AI tool',
     icon: '🔗'
   },
   {
-    before: '7天deadline → 5天找素材 → 2天赶论文',
-    after: '知识已消化好 → 7天都用来写',
+    before: '7-day deadline → 5 days hunting materials → 2 days to write',
+    after: 'Knowledge already digested → all 7 days go to writing',
     icon: '⏰'
   }
 ];
 
 const Comparison = () => (
   <section className="comparison-section container">
-    <div className="section-header animate-fade-in">
-      <h2 className="section-title">传统方式 vs <span className="text-gradient">NoteCapt</span></h2>
-      <p className="section-subtitle">看看差距在哪里</p>
+    {/* Top: Title left + Image right */}
+    <div className="comparison-hero animate-fade-in">
+      <div className="comparison-hero-text">
+        <h2 className="comparison-main-title">The Old Way vs <span className="text-accent">NoteCapt</span></h2>
+        <p className="comparison-main-subtitle">See where the gap really is — four everyday moments where the old workflow leaks knowledge.</p>
+      </div>
+      <div className="comparison-hero-image">
+        <img src="/images/comparison.png" alt="The old way vs NoteCapt" />
+      </div>
     </div>
 
+    {/* Bottom: 2×2 grid of comparison cards */}
     <div className="comparison-grid">
       {comparisons.map((c, i) => (
-        <div key={i} className="comparison-row glass animate-fade-in" style={{ animationDelay: `${i * 0.1}s` }}>
-          <div className="comparison-icon">{c.icon}</div>
-          <div className="comparison-before">
-            <div className="comparison-label">❌ 传统方式</div>
-            <p>{c.before}</p>
-          </div>
-          <div className="comparison-arrow">→</div>
-          <div className="comparison-after">
-            <div className="comparison-label">✅ 用NoteCapt</div>
-            <p>{c.after}</p>
+        <div key={i} className="comparison-card animate-fade-in" style={{ animationDelay: `${i * 0.08}s` }}>
+          <div className="comparison-card-inner">
+            <div className="comparison-icon">{c.icon}</div>
+            <div className="comparison-before">
+              <div className="comparison-label">Before</div>
+              <p>{c.before}</p>
+            </div>
+            <div className="comparison-arrow">→</div>
+            <div className="comparison-after">
+              <div className="comparison-label">With NoteCapt</div>
+              <p>{c.after}</p>
+            </div>
           </div>
         </div>
       ))}
     </div>
 
-    <div className="comparison-image glass">
-      <img src="/images/comparison.png" alt="传统方式 vs NoteCapt对比" />
-    </div>
-
     <style>{`
       .comparison-section { padding: var(--section-padding); }
-      .comparison-grid { display: flex; flex-direction: column; gap: 20px; margin-top: 48px; margin-bottom: 48px; }
 
-      .comparison-row {
+      /* Top hero: title left + image right */
+      .comparison-hero {
         display: grid;
-        grid-template-columns: auto 1fr auto 1fr;
-        gap: 20px;
-        padding: 24px 32px;
-        border-radius: 16px;
+        grid-template-columns: 1fr 1.2fr;
+        gap: 48px;
         align-items: center;
+        margin-bottom: 40px;
       }
-
-      .comparison-icon {
-        font-size: 2rem;
+      .comparison-hero-text {}
+      .comparison-main-title {
+        font-size: 3rem;
+        font-weight: 700;
+        line-height: 1.15;
+        margin-bottom: 16px;
       }
-
-      .comparison-label {
-        font-size: 0.7rem;
-        font-weight: 600;
-        margin-bottom: 6px;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-      }
-
-      .comparison-before {
-        opacity: 0.7;
-      }
-
-      .comparison-before .comparison-label {
-        color: rgba(255,59,59,0.8);
-      }
-
-      .comparison-before p {
-        font-size: 0.9rem;
+      .comparison-main-subtitle {
+        font-size: 1.05rem;
         color: var(--text-muted);
+        line-height: 1.7;
       }
-
-      .comparison-arrow {
-        font-size: 1.5rem;
-        color: var(--accent);
-        font-weight: bold;
-      }
-
-      .comparison-after .comparison-label {
-        color: rgba(59,255,134,0.9);
-      }
-
-      .comparison-after p {
-        font-size: 0.95rem;
-        color: var(--text-main);
-        font-weight: 600;
-      }
-
-      .comparison-image-placeholder {
-        padding: 64px 32px;
-        border-radius: 20px;
-        text-align: center;
-        background: rgba(0,0,0,0.2);
-        border: 2px dashed rgba(134,59,255,0.3);
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 16px;
-      }
-
-      .comparison-image-placeholder .placeholder-icon {
-        font-size: 4rem;
-        opacity: 0.3;
-      }
-
-      .comparison-image-placeholder small {
-        color: var(--text-muted);
-        font-size: 0.85rem;
-        max-width: 600px;
-        line-height: 1.5;
-      }
-
-      .comparison-image {
-        border-radius: 20px;
+      .comparison-hero-image {
+        border-radius: var(--radius-card);
         overflow: hidden;
+        border: 0.5px solid var(--border-light);
         background: rgba(0,0,0,0.1);
-        margin-top: 48px;
-        margin-bottom: 48px;
       }
-
-      .comparison-image img {
+      .comparison-hero-image img {
         width: 100%;
         height: auto;
         display: block;
       }
 
+      /* Bottom: 2×2 card grid */
+      .comparison-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+
+      .comparison-card {
+        padding: 24px 28px;
+        border-radius: var(--radius-img);
+        border: 0.5px solid var(--border-light);
+        background: rgba(255,255,255,0.02);
+        transition: var(--transition-smooth);
+      }
+      .comparison-card:hover { border-color: var(--border-accent); }
+
+      .comparison-card-inner {
+        display: grid;
+        grid-template-columns: auto 1fr auto 1fr;
+        gap: 16px;
+        align-items: center;
+      }
+
+      .comparison-icon { font-size: 1.4rem; }
+      .comparison-label {
+        font-size: 0.72rem;
+        font-weight: 600;
+        margin-bottom: 4px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        font-family: 'IBM Plex Mono', monospace;
+        color: var(--text-muted);
+      }
+      .comparison-before p {
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        line-height: 1.5;
+      }
+      .comparison-arrow {
+        font-size: 1rem;
+        color: var(--accent);
+        font-weight: 600;
+      }
+      .comparison-after .comparison-label { color: var(--accent); }
+      .comparison-after p {
+        font-size: 0.85rem;
+        color: var(--text-main);
+        font-weight: 600;
+        line-height: 1.5;
+      }
+
       @media (max-width: 992px) {
-        .comparison-row {
-          grid-template-columns: 1fr;
-          gap: 16px;
-          padding: 20px;
-        }
-        .comparison-icon {
-          justify-self: center;
-        }
-        .comparison-arrow {
-          transform: rotate(90deg);
-          justify-self: center;
-        }
+        .comparison-hero { grid-template-columns: 1fr; gap: 32px; }
+        .comparison-grid { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 768px) {
+        .comparison-main-title { font-size: 2rem; }
+        .comparison-card-inner { grid-template-columns: 1fr; gap: 10px; }
+        .comparison-icon { justify-self: center; }
+        .comparison-arrow { transform: rotate(90deg); justify-self: center; }
       }
     `}</style>
   </section>

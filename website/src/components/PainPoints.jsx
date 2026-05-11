@@ -3,56 +3,60 @@ import React from 'react';
 const scenarios = [
   {
     icon: '🎓',
-    persona: '学生 / 终身学习者',
-    pain: '上课时教授讲到精彩推导，掏手机解锁、找APP、按录音、切相机拍PPT...等搞定这一切，教授已经翻页了',
-    solution: '0.5秒按下快门，录音+拍照同时进行。每张照片自动锚定录音时间轴，复习时点击照片立刻听到那一刻的讲解',
-    image: '/images/classroom.png'
+    persona: 'Student / Lifelong Learner',
+    tagline: 'One-click lecture citations · 10× faster project references',
+    pain: 'Professor hits a brilliant derivation mid-lecture — you grab your phone, unlock, open the app, hit record, switch to camera for the slide... by then, the slide has moved on.',
+    solution: 'One press in 0.5s — audio and photo capture simultaneously. Every photo is time-anchored to the recording. Review later: tap the photo, hear exactly what was said.',
+    image: '/images/classroom.png',
   },
   {
     icon: '💼',
-    persona: '职场人士',
-    pain: '每周5场会议，记了一堆笔记，写周报时还是一片空白。录音在一个APP里，照片在相册和自拍混在一起',
-    solution: '会议结束回到电脑，文件夹已自动命名分类生成摘要。拖进AI，10秒生成周报素材',
-    image: '/images/workplace.png'
+    persona: 'Professional',
+    tagline: 'One-click meeting notes · 10× faster weekly reports',
+    pain: '5 meetings a week, pages of notes — and when the weekly report is due, your mind goes blank. Recordings in one app, photos scattered among selfies in your camera roll.',
+    solution: 'By the time you\'re back at your desk, the folder is already named, sorted, and summarized. Drag it into AI, get your weekly report draft in 10 seconds.',
+    image: '/images/workplace.png',
   },
   {
     icon: '✍️',
-    persona: '内容创作者 / 研究者',
-    pain: '论文due还有7天，花5天翻遍手机电脑拼素材，最后只剩2天写论文。灵感记在各种地方，真要用时找不到',
-    solution: '一整个学期的知识已消化好。打开主题文件夹拖进AI，10分钟出框架。7天都用来写论文',
-    image: '/images/creator.png'
+    persona: 'Content Creator / Researcher',
+    tagline: 'One-click research library · 7-day deadline, all-in on creating',
+    pain: '7 days until the deadline — spend 5 hunting for materials across devices, leaving only 2 days to actually write. Ideas scattered everywhere, impossible to find when you need them.',
+    solution: 'An entire semester\'s knowledge already digested. Open the topic folder, drop it into AI, get the outline in 10 minutes. All 7 days go toward writing.',
+    image: '/images/creator.png',
   }
 ];
 
 const PainPoints = () => (
   <section className="pain-section container">
     <div className="section-header animate-fade-in">
-      <h2 className="section-title">你有没有过<span className="text-gradient">这样的时刻</span>？</h2>
-      <p className="section-subtitle">不是你不努力，是现在根本没有一个好办法把知识收在一起</p>
+      <h2 className="section-title">Ever had <span className="text-accent">one of these moments</span>?</h2>
+      <p className="section-subtitle">It's not a willpower problem — there's just no good system for pulling your knowledge together.</p>
     </div>
 
     <div className="pain-grid">
       {scenarios.map((s, i) => (
-        <div key={i} className="pain-card glass animate-fade-in" style={{ animationDelay: `${i * 0.15}s` }}>
-          <div className="pain-card-header">
-            <div className="pain-icon">{s.icon}</div>
-            <div className="pain-persona">{s.persona}</div>
-          </div>
-
-          <div className="pain-content">
-            <div className="pain-problem">
-              <div className="pain-label">😫 痛点</div>
-              <p>{s.pain}</p>
+        <div key={i} className="pain-card animate-fade-in" style={{ animationDelay: `${i * 0.12}s` }}>
+          <div className="pain-card-left">
+            <div className="pain-card-header">
+              <div className="pain-icon">{s.icon}</div>
+              <div>
+                <div className="pain-persona">{s.persona}</div>
+                <div className="pain-tagline">{s.tagline}</div>
+              </div>
             </div>
-
-            <div className="pain-arrow">→</div>
-
-            <div className="pain-solution">
-              <div className="pain-label">✨ 用NoteCapt</div>
-              <p>{s.solution}</p>
+            <div className="pain-content">
+              <div className="pain-problem">
+                <div className="pain-label">The Problem</div>
+                <p>{s.pain}</p>
+              </div>
+              <div className="pain-arrow">→</div>
+              <div className="pain-solution">
+                <div className="pain-label">With NoteCapt</div>
+                <p>{s.solution}</p>
+              </div>
             </div>
           </div>
-
           <div className="pain-image">
             <img src={s.image} alt={s.persona} />
           </div>
@@ -62,14 +66,39 @@ const PainPoints = () => (
 
     <style>{`
       .pain-section { padding: var(--section-padding); }
-      .pain-grid { display: grid; gap: 32px; margin-top: 48px; }
+      .pain-grid { display: grid; gap: 20px; margin-top: 48px; }
 
       .pain-card {
-        padding: 36px;
-        border-radius: 24px;
+        padding: 32px 36px;
+        border-radius: var(--radius-card);
+        display: grid;
+        grid-template-columns: 1fr 340px;
+        gap: 32px;
+        align-items: center;
+        border: 0.5px solid var(--border-light);
+        background: rgba(255,255,255,0.02);
+        transition: var(--transition-smooth);
+      }
+      .pain-card:hover { border-color: var(--border-accent); }
+
+      .pain-card-left {
         display: flex;
         flex-direction: column;
         gap: 24px;
+      }
+
+      .pain-image {
+        border-radius: var(--radius-img);
+        overflow: hidden;
+        background: rgba(0,0,0,0.1);
+        align-self: stretch;
+      }
+      .pain-image img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        min-height: 200px;
       }
 
       .pain-card-header {
@@ -77,22 +106,29 @@ const PainPoints = () => (
         align-items: center;
         gap: 16px;
       }
-
       .pain-icon {
-        font-size: 2.5rem;
-        width: 64px;
-        height: 64px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: rgba(134,59,255,0.1);
-        border-radius: 16px;
+        font-size: 2rem;
+        width: 56px; height: 56px;
+        display: flex; align-items: center; justify-content: center;
+        background: var(--accent-dim);
+        border: 0.5px solid var(--border-accent);
+        border-radius: 14px;
       }
-
       .pain-persona {
-        font-size: 1.1rem;
+        font-size: 1rem;
         font-weight: 600;
         color: var(--text-main);
+      }
+      .pain-tagline {
+        font-size: 0.85rem;
+        color: var(--accent);
+        font-weight: 700;
+        line-height: 1.5;
+        margin-top: 4px;
+        background: var(--accent-dim);
+        border-radius: 6px;
+        padding: 3px 8px;
+        display: inline-block;
       }
 
       .pain-content {
@@ -101,94 +137,49 @@ const PainPoints = () => (
         gap: 20px;
         align-items: center;
       }
-
       .pain-label {
-        font-size: 0.75rem;
+        font-size: 0.72rem;
         font-weight: 600;
         color: var(--accent);
         margin-bottom: 8px;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
+        letter-spacing: 1px;
+        font-family: 'IBM Plex Mono', monospace;
       }
-
       .pain-problem {
-        background: rgba(255,59,59,0.08);
-        padding: 20px;
+        padding: 16px 20px;
         border-radius: 12px;
-        border-left: 3px solid rgba(255,59,59,0.4);
+        border-left: 2px solid rgba(255,80,80,0.4);
+        background: rgba(255,80,80,0.04);
       }
-
       .pain-problem p {
-        font-size: 0.9rem;
-        line-height: 1.6;
+        font-size: 0.875rem;
+        line-height: 1.65;
         color: var(--text-muted);
       }
-
       .pain-arrow {
-        font-size: 1.5rem;
+        font-size: 1.2rem;
         color: var(--accent);
-        font-weight: bold;
+        font-weight: 600;
       }
-
       .pain-solution {
-        background: rgba(59,255,134,0.08);
-        padding: 20px;
+        padding: 16px 20px;
         border-radius: 12px;
-        border-left: 3px solid rgba(59,255,134,0.4);
+        border-left: 2px solid var(--border-accent);
+        background: var(--accent-dim);
       }
-
       .pain-solution p {
-        font-size: 0.9rem;
-        line-height: 1.6;
+        font-size: 0.875rem;
+        line-height: 1.65;
         color: var(--text-main);
         font-weight: 500;
       }
 
-      .pain-image-placeholder {
-        background: rgba(0,0,0,0.2);
-        border: 2px dashed rgba(134,59,255,0.3);
-        border-radius: 12px;
-        padding: 48px 24px;
-        text-align: center;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 12px;
-      }
-
-      .placeholder-icon {
-        font-size: 3rem;
-        opacity: 0.3;
-      }
-
-      .pain-image-placeholder small {
-        color: var(--text-muted);
-        font-size: 0.8rem;
-        line-height: 1.5;
-        max-width: 500px;
-      }
-
-      .pain-image {
-        border-radius: 16px;
-        overflow: hidden;
-        background: rgba(0,0,0,0.1);
-      }
-
-      .pain-image img {
-        width: 100%;
-        height: auto;
-        display: block;
-      }
-
       @media (max-width: 992px) {
-        .pain-content {
-          grid-template-columns: 1fr;
-          gap: 16px;
-        }
-        .pain-arrow {
-          transform: rotate(90deg);
-          justify-self: center;
-        }
+        .pain-card { grid-template-columns: 1fr; }
+        .pain-content { grid-template-columns: 1fr; gap: 12px; }
+        .pain-arrow { transform: rotate(90deg); justify-self: center; }
+        .pain-image img { min-height: 180px; }
       }
     `}</style>
   </section>
