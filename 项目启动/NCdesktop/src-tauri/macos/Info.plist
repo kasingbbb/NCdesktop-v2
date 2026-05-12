@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 与仅 Mach-O 的 ad-hoc 签名一致，避免「code has no resources but signature indicates they must be present」 -->
+	<key>CSResourcesFileMapped</key>
+	<false/>
+	<!-- 语音识别授权描述（SFSpeechRecognizer 必需） -->
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>NoteCapt 需要使用语音识别来将录音文件转换为文字笔记。</string>
+</dict>
+</plist>

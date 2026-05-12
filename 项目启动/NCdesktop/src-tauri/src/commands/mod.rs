@@ -12,3 +12,6 @@ pub mod dropzone;
 pub mod export;
 pub mod llm;
 pub mod workspace_folders;
+pub mod knowledge_understanding;
+pub mod knowledge;
+pub mod conversion;

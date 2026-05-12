@@ -7,6 +7,10 @@ pub mod tag;
 pub mod note;
 pub mod search;
 pub mod settings;
+pub mod knowledge;
+pub mod knowledge_understanding;
+pub mod co_occurrence;
+pub mod concepts_extraction_log;
 
 use rusqlite::Connection;
 use std::path::Path;

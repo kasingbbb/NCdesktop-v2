@@ -23,6 +23,15 @@ export interface AppSettings {
 
   analyticsEnabled: boolean;
   dataStoragePath: string;
+
+  /** 学习功能总开关（sidebar v2，ADR-005） */
+  showLearningFeatures: boolean;
+  /** 校历绑定（学习功能子项） */
+  bindSchoolCalendar: boolean;
+  /** 每日复习提醒（学习功能子项） */
+  enableDailyReviewReminder: boolean;
+  /** 升级智能 ON 评估一次性标记（fail-open，仅 false→true） */
+  learningAutoEnableEvaluated: boolean;
 }
 
 /** LLM 目标 */

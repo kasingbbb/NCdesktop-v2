@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
+    "tauri:dev:clean": "rm -rf node_modules/.vite dist && tauri dev",
     "tauri:build": "tauri build",
     "lint": "eslint src --ext .ts,.tsx",
     "check": "tsc --noEmit",
@@ -16,6 +17,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@crabnebula/tauri-plugin-drag": "^2.1.0",
     "@tanstack/react-virtual": "^3.13.23",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-shell": "^2.3.5",

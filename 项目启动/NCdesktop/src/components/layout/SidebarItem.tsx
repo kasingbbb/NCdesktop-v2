@@ -3,7 +3,7 @@ interface SidebarItemProps {
   icon: React.ReactNode;
   label: string;
   active?: boolean;
-  badge?: string | number;
+  badge?: React.ReactNode;
   onClick?: () => void;
   className?: string;
 }
@@ -30,15 +30,16 @@ interface SidebarSectionProps {
   title: string;
   children: React.ReactNode;
   action?: React.ReactNode;
+  titleColor?: string;
 }
 
-export function SidebarSection({ title, children, action }: SidebarSectionProps) {
+export function SidebarSection({ title, children, action, titleColor }: SidebarSectionProps) {
   return (
     <div className="mb-[var(--space-2)]">
       <div className="flex items-center justify-between px-[var(--space-3)] mb-[var(--space-1)]">
         <p
           className="text-[var(--text-xs)] uppercase tracking-[0.08em]"
-          style={{ color: "var(--text-tertiary)" }}
+          style={{ color: titleColor ?? "var(--text-tertiary)" }}
         >
           {title}
         </p>

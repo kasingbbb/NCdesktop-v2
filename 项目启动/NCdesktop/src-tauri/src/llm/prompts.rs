@@ -108,3 +108,126 @@ pub fn system_message() -> String {
         PROMPT_VERSION
     )
 }
+
+// ─── 知识理解辅助层 prompt builders（task_003） ──────────────────────────
+
+/// 单段摘录素材（用于 summary prompt）
+pub struct ExcerptItem {
+    pub asset_name: String,
+    pub project_name: String,
+    pub text: String,
+}
+
+/// 单段文档片段（用于 explanation prompt）
+pub struct DocumentSection {
+    pub project_name: String,
+    pub asset_name: String,
+    pub content: String,
+}
+
+/// 关键要点（用于 mirror / 校对 prompt）
+pub struct KeyPoint {
+    pub text: String,
+    pub source: String,
+}
+
+/// 摘要 prompt：把多个文档摘录整合成一段连贯说明，必须只用所给材料 + 每条要点都标来源。
+pub fn build_summary_prompt(concept_name: &str, excerpts: &[ExcerptItem]) -> String {
+    let mut body = String::new();
+    for (i, e) in excerpts.iter().enumerate() {
+        body.push_str(&format!(
+            "[Source {}: {} / {}]\n{}\n\n",
+            i + 1,
+            e.asset_name,
+            e.project_name,
+            e.text
+        ));
+    }
+    format!(
+        "概念名称：{concept_name}\n\n\
+         以下是来自学生文档的相关摘录：\n\n{body}\n\
+         CRITICAL RULES:\n\
+         1. ONLY use information from provided documents above.\n\
+         2. Do NOT add any external knowledge or fabricate examples.\n\
+         3. Cite source for EVERY point by referencing the source labels (e.g. [Source 1]).\n\
+         4. Keep the summary concise, factual, and integrate overlapping points.\n\
+         5. Respond in the same language as the documents.\n\n\
+         请基于上述摘录撰写关于「{concept_name}」的整合摘要。",
+        concept_name = concept_name,
+        body = body.trim_end()
+    )
+}
+
+/// 理解框架 prompt：要求 LLM 输出 JSON（mechanism/typical_scenarios/common_misconceptions/essence_sentence），
+/// 每项都必须含 source 字段；不允许凭空构造。
+pub fn build_explanation_prompt(
+    concept_name: &str,
+    definition: &str,
+    sections: &[DocumentSection],
+) -> String {
+    let mut body = String::new();
+    for (i, s) in sections.iter().enumerate() {
+        body.push_str(&format!(
+            "[Source {}: {} / {}]\n{}\n\n",
+            i + 1,
+            s.asset_name,
+            s.project_name,
+            s.content
+        ));
+    }
+    format!(
+        "概念名称：{concept_name}\n\
+         已有定义：{definition}\n\n\
+         以下是该概念在学生文档中的出现段落：\n\n{body}\n\
+         CRITICAL RULES:\n\
+         1. ONLY use information from provided documents above; never introduce outside knowledge.\n\
+         2. Cite source for EVERY point — each item must include a `source` field referencing the originating document.\n\
+         3. Do NOT fabricate mechanisms, scenarios, or misconceptions; if a category has no evidence in the documents, omit it.\n\
+         4. `mechanism.source` MUST be non-empty; if no mechanism is observable in documents, leave the mechanism description blank but never invent one.\n\
+         5. Respond in JSON only, no markdown fences or prose around it.\n\n\
+         Output JSON shape:\n\
+         {{\n\
+           \"mechanism\": {{ \"text\": \"...\", \"source\": \"...\" }},\n\
+           \"typical_scenarios\": [{{ \"text\": \"...\", \"source\": \"...\" }}],\n\
+           \"common_misconceptions\": [{{ \"text\": \"...\", \"source\": \"...\" }}] | null,\n\
+           \"essence_sentence\": \"...\"\n\
+         }}",
+        concept_name = concept_name,
+        definition = definition,
+        body = body.trim_end()
+    )
+}
+
+/// 镜子核对 prompt：对照学生自己写的解释 vs 学生自己的文档，用探索式语言反馈，禁用 wrong/incorrect/incomplete/missing/failed to。
+pub fn build_mirror_prompt(
+    concept_name: &str,
+    user_explanation: &str,
+    key_points: &[KeyPoint],
+) -> String {
+    let mut points = String::new();
+    for (i, p) in key_points.iter().enumerate() {
+        points.push_str(&format!(
+            "[Key Point {}: source = {}]\n{}\n\n",
+            i + 1,
+            p.source,
+            p.text
+        ));
+    }
+    format!(
+        "概念名称：{concept_name}\n\n\
+         学生自己写下的理解：\n{user_explanation}\n\n\
+         学生自己文档中的关键要点：\n\n{points}\n\
+         CRITICAL RULES:\n\
+         1. Compare ONLY against the provided documents — never against any external standard.\n\
+         2. Cite source for EVERY observation by referencing key-point labels (e.g. [Key Point 1]).\n\
+         3. Use encouraging, exploratory language throughout.\n\
+         4. NEVER use words like 'wrong', 'incorrect', 'incomplete', 'missing', 'failed to'.\n\
+         5. Acknowledge what the student captured correctly first.\n\
+         6. Present any uncovered points as additional perspectives or things to revisit, not as mistakes.\n\
+         7. Respond in the same language as the student's explanation.\n\n\
+         请基于以上规则给出反馈。",
+        concept_name = concept_name,
+        user_explanation = user_explanation,
+        points = points.trim_end()
+    )
+}

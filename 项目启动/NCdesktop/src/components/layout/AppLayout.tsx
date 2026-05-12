@@ -81,7 +81,7 @@ export function AppLayout({
       className="flex flex-col h-screen w-screen overflow-hidden"
       style={{ background: "var(--surface-canvas)" }}
     >
-      <TitleBar />
+      <TitleBar onSettingsOpen={onSettingsOpen} onSearchOpen={onSearchOpen} />
 
       <div className="flex flex-1 overflow-hidden">
         {showSidebar && (

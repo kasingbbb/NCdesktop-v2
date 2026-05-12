@@ -125,6 +125,43 @@ export async function getAssetAnalysis(assetId: string): Promise<AIAnalysis | nu
   return invoke<AIAnalysis | null>("get_asset_analysis", { assetId });
 }
 
+export async function moveAssetToWorkspaceFolder(
+  assetIds: string[],
+  targetRelativePath: string,
+  projectId: string
+): Promise<void> {
+  return invoke<void>("move_asset_to_workspace_folder", {
+    assetIds,
+    targetRelativePath,
+    projectId,
+  });
+}
+
+// ── MarkItDown 转换 ────────────────────────────────
+
+export interface MarkitdownStatus {
+  available: boolean;
+  version: string | null;
+  pythonCmd: string | null;
+  reason: string | null;
+  installHint: string | null;
+}
+
+export async function checkMarkitdownStatus(): Promise<MarkitdownStatus> {
+  return invoke<MarkitdownStatus>("check_markitdown_status");
+}
+
+export interface ConversionResult {
+  extractorType: string;
+  markdown: string;
+  qualityLevel: number;
+  segmentCount: number;
+}
+
+export async function convertAssetToMarkdown(assetId: string): Promise<ConversionResult> {
+  return invoke<ConversionResult>("convert_asset_to_markdown", { assetId });
+}
+
 // ── Timeline ───────────────────────────────────────
 
 export async function getTimeline(projectId: string): Promise<Timeline | null> {
@@ -310,6 +347,10 @@ export interface ImportDropSummary {
 
 export async function importDropPaths(paths: string[]): Promise<ImportDropSummary> {
   return invoke<ImportDropSummary>("import_drop_paths", { paths });
+}
+
+export async function closeDropzoneWindow(): Promise<void> {
+  return invoke<void>("close_dropzone_window");
 }
 
 // ── Sync ───────────────────────────────────────────

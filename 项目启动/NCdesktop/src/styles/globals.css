@@ -277,3 +277,39 @@ textarea,
 [data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.25);
 }
+
+/* Sidebar v2: 学习模式分组语义令牌 */
+:root {
+  --sidebar-group-learning: var(--brand-gold, #ffc000);
+  --concept-linked-bg: #fffbeb;
+  --concept-linked-stripe: var(--color-warning, #ff9500);
+  --concept-merge-bg: #fef3c7;
+  --concept-merge-fg: #92400e;
+}
+
+/* Command Palette 入场动画 */
+@keyframes cmdEnter {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 学习中心分组淡入 */
+@keyframes sidebarLearningFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.sidebar-learning-fade-in {
+  animation: sidebarLearningFadeIn 200ms ease-out;
+}

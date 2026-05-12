@@ -21,6 +21,10 @@ const DEFAULT_SETTINGS: AppSettings = {
   llmBridgeTarget: { type: "chatgpt" },
   analyticsEnabled: false,
   dataStoragePath: "",
+  showLearningFeatures: false,
+  bindSchoolCalendar: false,
+  enableDailyReviewReminder: false,
+  learningAutoEnableEvaluated: false,
 };
 
 interface SettingsStore {
@@ -81,3 +85,19 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     await get().updateSetting("llmBridgeTarget", target);
   },
 }));
+
+/** 派生学习功能有效设置 — 主开关 OFF 时依赖字段强制 OFF（ADR-002 读取端派生方案，
+ *  写入端绝不拦截依赖字段真值，真值不丢）。 */
+export function useEffectiveLearningSettings(): {
+  showLearningFeatures: boolean;
+  bindSchoolCalendar: boolean;
+  enableDailyReviewReminder: boolean;
+} {
+  const settings = useSettingsStore((s) => s.settings);
+  const show = settings.showLearningFeatures;
+  return {
+    showLearningFeatures: show,
+    bindSchoolCalendar: show ? settings.bindSchoolCalendar : false,
+    enableDailyReviewReminder: show ? settings.enableDailyReviewReminder : false,
+  };
+}

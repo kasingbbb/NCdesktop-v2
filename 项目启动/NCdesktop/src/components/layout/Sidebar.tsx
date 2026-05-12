@@ -1,9 +1,10 @@
-import { Search, Clock, Star } from "lucide-react";
-import { SidebarItem } from "./SidebarItem";
+import { Clock, Star, CalendarDays, Network, Sun } from "lucide-react";
+import { SidebarItem, SidebarSection } from "./SidebarItem";
 import { ProjectTree } from "../features/ProjectTree";
 import { TagTree } from "../features/TagTree";
 import { SidebarFooter } from "./SidebarFooter";
 import { useUIStore } from "../../stores/uiStore";
+import { useEffectiveLearningSettings } from "../../stores/settingsStore";
 
 interface SidebarProps {
   width: number;
@@ -11,8 +12,9 @@ interface SidebarProps {
   onSearchOpen?: () => void;
 }
 
-export function Sidebar({ width, onSettingsOpen, onSearchOpen }: SidebarProps) {
+export function Sidebar({ width, onSettingsOpen }: SidebarProps) {
   const { activeSidebarSection, setSidebarSection } = useUIStore();
+  const { showLearningFeatures } = useEffectiveLearningSettings();
 
   return (
     <aside
@@ -37,33 +39,48 @@ export function Sidebar({ width, onSettingsOpen, onSearchOpen }: SidebarProps) {
 
       {/* 导航列表 */}
       <nav className="flex-1 overflow-y-auto px-[var(--space-2)] py-[var(--space-1)]">
-        <SidebarItem
-          icon={<Search size={16} />}
-          label="Search"
-          active={activeSidebarSection === "search"}
-          onClick={() => {
-            setSidebarSection("search");
-            onSearchOpen?.();
-          }}
-        />
-        <SidebarItem
-          icon={<Clock size={16} />}
-          label="Recent"
-          active={activeSidebarSection === "recent"}
-          onClick={() => setSidebarSection("recent")}
-        />
-        <SidebarItem
-          icon={<Star size={16} />}
-          label="Starred"
-          active={activeSidebarSection === "starred"}
-          onClick={() => setSidebarSection("starred")}
-        />
+        <SidebarSection title="工作区">
+          <SidebarItem
+            icon={<Clock size={16} />}
+            label="最近"
+            active={activeSidebarSection === "recent"}
+            onClick={() => setSidebarSection("recent")}
+          />
+          <SidebarItem
+            icon={<Star size={16} />}
+            label="收藏"
+            active={activeSidebarSection === "starred"}
+            onClick={() => setSidebarSection("starred")}
+          />
+        </SidebarSection>
 
-        <div className="h-px my-[var(--space-2)]" style={{ background: "var(--border-primary)" }} />
+        <SidebarSection title="知识">
+          <SidebarItem
+            icon={<Network size={16} />}
+            label="知识中心"
+            active={activeSidebarSection === "knowledge-hub"}
+            onClick={() => setSidebarSection("knowledge-hub")}
+          />
+        </SidebarSection>
+
+        {showLearningFeatures ? (
+          <SidebarSection title="学习中心" titleColor="var(--sidebar-group-learning)">
+            <SidebarItem
+              icon={<Sun size={16} />}
+              label="今日"
+              active={activeSidebarSection === "today"}
+              onClick={() => setSidebarSection("today")}
+            />
+            <SidebarItem
+              icon={<CalendarDays size={16} />}
+              label="日历"
+              active={activeSidebarSection === "calendar"}
+              onClick={() => setSidebarSection("calendar")}
+            />
+          </SidebarSection>
+        ) : null}
 
         <ProjectTree />
-
-        <div className="h-px my-[var(--space-2)]" style={{ background: "var(--border-primary)" }} />
 
         <TagTree />
       </nav>

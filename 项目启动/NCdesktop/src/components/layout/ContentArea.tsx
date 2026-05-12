@@ -4,10 +4,21 @@ import { Toolbar } from "./Toolbar";
 import { ProjectListView } from "../features/ProjectListView";
 import { AssetListView } from "../features/AssetListView";
 import { AssetPreview } from "../features/AssetPreview";
+import { CalendarWeekView } from "../features/calendar/CalendarWeekView";
 
 export function ContentArea() {
-  const { activeSidebarSection, inspectorOpen } = useUIStore();
+  const { activeSidebarSection, inspectorOpen, rightPanelMode } = useUIStore();
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
+
+  if (rightPanelMode !== "course_preview" && activeSidebarSection === "calendar") {
+    return (
+      <main
+        className={`flex-1 flex flex-col h-full min-w-0 overflow-hidden bg-[var(--surface-canvas)] p-3 ${inspectorOpen ? "border-r border-app" : ""}`}
+      >
+        <CalendarWeekView />
+      </main>
+    );
+  }
 
   // Route to different views based on sidebar selection
   const isLibraryView = ["projects", "recent", "search", "starred"].includes(activeSidebarSection);

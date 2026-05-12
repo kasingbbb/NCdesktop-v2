@@ -1,5 +1,5 @@
 import { type DragEvent, useEffect } from "react";
-import { GripHorizontal, MoveDiagonal2 } from "lucide-react";
+import { GripHorizontal, MoveDiagonal2, X } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
@@ -225,7 +225,7 @@ export function DropzoneApp() {
       >
         {/* 顶部拖动条 */}
         <div
-          className="shrink-0 h-8 flex items-center justify-center gap-1.5 cursor-grab active:cursor-grabbing z-40 rounded-t-md border-b border-gray-200 bg-gray-50"
+          className="relative shrink-0 h-8 flex items-center justify-center gap-1.5 cursor-grab active:cursor-grabbing z-40 rounded-t-md border-b border-gray-200 bg-gray-50"
           onMouseDown={(e) => {
             if (e.button !== 0) {
               return;
@@ -237,6 +237,21 @@ export function DropzoneApp() {
           <span className="text-[10px] font-medium tracking-wide" style={{ color: "var(--text-secondary)" }}>
             拖动移动
           </span>
+          <button
+            type="button"
+            aria-label="关闭悬浮窗"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded hover:bg-gray-200 text-gray-500 hover:text-gray-700 cursor-pointer"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              cmd
+                .closeDropzoneWindow()
+                .then(() => {})
+                .catch((err) => console.error("[dropzone] close failed", err));
+            }}
+          >
+            <X size={12} />
+          </button>
         </div>
 
         <div className="relative z-10 flex-1 min-h-0 flex flex-col items-center justify-center px-2 pb-2">

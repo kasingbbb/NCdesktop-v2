@@ -14,6 +14,82 @@ pub fn run_migrations(conn: &Connection) -> Result<(), String> {
         v2_asset_original_name(conn)?;
     }
 
+    if current_version < 4 {
+        v4_knowledge_understanding(conn)?;
+    }
+
+    Ok(())
+}
+
+/// V4：知识理解辅助层（concept_summaries / concept_explanations /
+///                     concept_user_notes / concept_relations）
+/// V3（concepts 等基表）未在当前源码中存在；V4 仅创建表结构，运行时插入需先建 concepts。
+fn v4_knowledge_understanding(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS concept_summaries (
+            id TEXT PRIMARY KEY,
+            concept_id TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            source_asset_ids TEXT NOT NULL,
+            model TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            FOREIGN KEY (concept_id) REFERENCES concepts(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_concept_summaries_concept_id
+            ON concept_summaries(concept_id);
+
+        CREATE TABLE IF NOT EXISTS concept_explanations (
+            id TEXT PRIMARY KEY,
+            concept_id TEXT NOT NULL,
+            mechanism TEXT NOT NULL,
+            typical_scenarios TEXT NOT NULL,
+            common_misconceptions TEXT,
+            essence_sentence TEXT NOT NULL,
+            source_asset_ids TEXT NOT NULL,
+            model TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            FOREIGN KEY (concept_id) REFERENCES concepts(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_concept_explanations_concept_id
+            ON concept_explanations(concept_id);
+
+        CREATE TABLE IF NOT EXISTS concept_user_notes (
+            id TEXT PRIMARY KEY,
+            concept_id TEXT NOT NULL UNIQUE,
+            user_explanation TEXT NOT NULL DEFAULT '',
+            mirror_feedback TEXT,
+            last_validated_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (concept_id) REFERENCES concepts(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_concept_user_notes_concept_id
+            ON concept_user_notes(concept_id);
+
+        CREATE TABLE IF NOT EXISTS concept_relations (
+            id TEXT PRIMARY KEY,
+            concept_a_id TEXT NOT NULL,
+            concept_b_id TEXT NOT NULL,
+            relation_type TEXT NOT NULL,
+            source_asset_ids TEXT NOT NULL,
+            co_occurrence_count INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (concept_a_id) REFERENCES concepts(id) ON DELETE CASCADE,
+            FOREIGN KEY (concept_b_id) REFERENCES concepts(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_concept_relations_a
+            ON concept_relations(concept_a_id);
+        CREATE INDEX IF NOT EXISTS idx_concept_relations_b
+            ON concept_relations(concept_b_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_concept_relations_pair
+            ON concept_relations(concept_a_id, concept_b_id, relation_type);
+
+        PRAGMA user_version = 4;
+        ",
+    )
+    .map_err(|e| format!("V4 迁移失败: {e}"))?;
+    log::info!("数据库迁移 V4 完成：知识理解辅助层");
     Ok(())
 }
 

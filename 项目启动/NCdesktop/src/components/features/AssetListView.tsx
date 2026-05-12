@@ -5,8 +5,10 @@ import { useProjectStore } from "../../stores/projectStore";
 import { useTagStore } from "../../stores/tagStore";
 import { useUIStore } from "../../stores/uiStore";
 import { useResizable } from "../../hooks/useResizable";
+import { useDragAssets } from "../../hooks/useDragAssets";
 import { ResizeHandle } from "../layout/ResizeHandle";
 import { WorkspaceFolderStrip } from "./WorkspaceFolderStrip";
+import { AssetContextMenu } from "./AssetContextMenu";
 import type { Asset, WorkspaceFolderEntry } from "../../types";
 import {
   getProjectWorkspaceRoot,
@@ -118,6 +120,9 @@ export function AssetListView() {
     error,
     selectAsset,
     selectedAssetId,
+    selectedAssetIds,
+    toggleSelectAsset,
+    setSelectedAssetIds,
     viewMode,
   } = useAssetStore();
   const activeProject = useProjectStore((s) => s.getActiveProject());
@@ -190,11 +195,55 @@ export function AssetListView() {
     direction: "right",
   });
 
+  const [leftPaneFocused, setLeftPaneFocused] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    assetId: string;
+    pane: "left" | "right";
+  } | null>(null);
+
+  const { makeDragProps } = useDragAssets(selectedAssetIds, assets);
+
+  const handleCardClick = useCallback(
+    (e: React.MouseEvent, assetId: string) => {
+      if (e.metaKey || e.ctrlKey) {
+        toggleSelectAsset(assetId);
+      } else {
+        selectAsset(assetId);
+        setSelectedAssetIds(new Set([assetId]));
+      }
+    },
+    [selectAsset, toggleSelectAsset, setSelectedAssetIds]
+  );
+
+  const handleCardContextMenu = useCallback(
+    (e: React.MouseEvent, assetId: string, pane: "left" | "right") => {
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY, assetId, pane });
+    },
+    []
+  );
+
   useEffect(() => {
     if (assetTagFilterId) {
       void fetchTags();
     }
   }, [assetTagFilterId, fetchTags]);
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
+        const tag = (e.target as HTMLElement | null)?.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA") return;
+        e.preventDefault();
+        const ids = new Set(displayAssets.map((a) => a.id));
+        setSelectedAssetIds(ids);
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [displayAssets, leftPaneFocused, setSelectedAssetIds]);
 
   if (isLoading) {
     return (
@@ -307,6 +356,8 @@ export function AssetListView() {
         <div
           className="flex flex-col min-h-0 min-w-0 border-r shrink-0"
           style={{ width: leftPane.width, borderColor: "var(--border-primary)" }}
+          onMouseEnter={() => setLeftPaneFocused(true)}
+          onMouseLeave={() => setLeftPaneFocused(false)}
         >
           <div className="px-3 py-2 border-b shrink-0 border-app bg-[var(--surface-tertiary)]">
             <p className="text-[var(--text-sm)] font-semibold" style={{ color: "var(--text-primary)" }}>
@@ -326,10 +377,19 @@ export function AssetListView() {
                     <li key={a.id}>
                       <button
                         type="button"
-                        onClick={() => selectAsset(a.id)}
+                        onClick={(e) => handleCardClick(e, a.id)}
+                        onContextMenu={(e) => handleCardContextMenu(e, a.id, "left")}
+                        {...makeDragProps(a.id)}
                         className="w-full text-left px-3 py-2.5 flex items-start gap-2 rounded-[var(--radius-md)] border border-app transition-colors hover:border-[var(--border-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--border-active)] bg-[var(--surface-primary)]"
                         style={{
-                          background: active ? "var(--sidebar-active-bg)" : undefined,
+                          background: selectedAssetIds.has(a.id)
+                            ? "var(--brand-navy-10)"
+                            : active
+                            ? "var(--sidebar-active-bg)"
+                            : undefined,
+                          outline: selectedAssetIds.has(a.id)
+                            ? "2px solid var(--brand-navy)"
+                            : undefined,
                         }}
                         title={hint ? `原件路径：${hint}` : originalDisplayName(a)}
                       >
@@ -356,10 +416,19 @@ export function AssetListView() {
                     <button
                       key={a.id}
                       type="button"
-                      onClick={() => selectAsset(a.id)}
+                      onClick={(e) => handleCardClick(e, a.id)}
+                      onContextMenu={(e) => handleCardContextMenu(e, a.id, "left")}
+                      {...makeDragProps(a.id)}
                       className="flex flex-col items-center gap-1.5 rounded-[var(--radius-md)] border border-app p-2 transition-colors hover:border-[var(--border-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-active)] bg-[var(--surface-primary)]"
                       style={{
-                        background: active ? "var(--sidebar-active-bg)" : undefined,
+                        background: selectedAssetIds.has(a.id)
+                          ? "var(--brand-navy-10)"
+                          : active
+                          ? "var(--sidebar-active-bg)"
+                          : undefined,
+                        outline: selectedAssetIds.has(a.id)
+                          ? "2px solid var(--brand-navy)"
+                          : undefined,
                       }}
                       title={hint ? `原件：${hint}` : undefined}
                     >
@@ -401,10 +470,19 @@ export function AssetListView() {
                     <li key={a.id}>
                       <button
                         type="button"
-                        onClick={() => selectAsset(a.id)}
+                        onClick={(e) => handleCardClick(e, a.id)}
+                        onContextMenu={(e) => handleCardContextMenu(e, a.id, "right")}
+                        {...makeDragProps(a.id)}
                         className="w-full text-left px-3 py-2.5 flex items-start gap-2 rounded-[var(--radius-md)] border border-app transition-colors hover:border-[var(--border-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--border-active)] bg-[var(--surface-primary)]"
                         style={{
-                          background: active ? "var(--sidebar-active-bg)" : undefined,
+                          background: selectedAssetIds.has(a.id)
+                            ? "var(--brand-navy-10)"
+                            : active
+                            ? "var(--sidebar-active-bg)"
+                            : undefined,
+                          outline: selectedAssetIds.has(a.id)
+                            ? "2px solid var(--brand-navy)"
+                            : undefined,
                         }}
                       >
                         <span className="shrink-0 mt-0.5">{assetIcon(a, 18)}</span>
@@ -453,10 +531,19 @@ export function AssetListView() {
                     <button
                       key={a.id}
                       type="button"
-                      onClick={() => selectAsset(a.id)}
+                      onClick={(e) => handleCardClick(e, a.id)}
+                      onContextMenu={(e) => handleCardContextMenu(e, a.id, "right")}
+                      {...makeDragProps(a.id)}
                       className="flex flex-col items-center gap-1 rounded-[var(--radius-md)] border border-app p-2 transition-colors hover:border-[var(--border-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--border-active)] bg-[var(--surface-primary)]"
                       style={{
-                        background: active ? "var(--sidebar-active-bg)" : undefined,
+                        background: selectedAssetIds.has(a.id)
+                          ? "var(--brand-navy-10)"
+                          : active
+                          ? "var(--sidebar-active-bg)"
+                          : undefined,
+                        outline: selectedAssetIds.has(a.id)
+                          ? "2px solid var(--brand-navy)"
+                          : undefined,
                       }}
                     >
                       <div className="w-14 h-14 rounded-[var(--radius-md)] flex items-center justify-center shrink-0 bg-[var(--surface-tertiary)]">
@@ -490,6 +577,26 @@ export function AssetListView() {
         </div>
       </div>
       )}
+
+      {contextMenu && activeProject ? (
+        <AssetContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          assetId={contextMenu.assetId}
+          pane={contextMenu.pane}
+          selectedAssetIds={selectedAssetIds}
+          workspaceFolders={workspaceFolders}
+          projectId={activeProject.id}
+          currentFilePath={
+            assets.find((a) => a.id === contextMenu.assetId)?.filePath ?? ""
+          }
+          onClose={() => setContextMenu(null)}
+          onMoved={() => {
+            void loadWorkspaceFolders();
+            void useAssetStore.getState().fetchAssets(activeProject.id);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

@@ -7,6 +7,9 @@ pub mod sync;
 pub mod audio;
 pub mod llm;
 pub mod workspace;
+// macos 模块依赖 Swift FFI 静态库（ocr_bridge / asr_bridge），build.rs 未编译它们，暂不激活
+// pub mod macos;
+pub mod extraction;
 
 /// 自动化测试专用：初始化日志、统一 `[TEST]` 前缀（仅 `cargo test` 编译）
 #[cfg(test)]
@@ -18,6 +21,7 @@ use db::Database;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_drag::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -60,6 +64,8 @@ pub fn run() {
             commands::asset::delete_asset,
             commands::asset::toggle_asset_star,
             commands::asset::get_asset_analysis,
+            commands::asset::move_asset_to_workspace_folder,
+            commands::asset::get_drag_icon_path,
             commands::timeline::get_timeline,
             commands::timeline::create_timeline,
             commands::timeline::get_audio_tracks,
@@ -110,6 +116,15 @@ pub fn run() {
             commands::workspace_folders::get_project_workspace_root,
             commands::workspace_folders::list_project_workspace_folders,
             commands::workspace_folders::reveal_project_workspace_folder,
+            commands::knowledge_understanding::knowledge_get_understanding_data,
+            commands::knowledge_understanding::knowledge_generate_summary,
+            commands::knowledge_understanding::knowledge_generate_explanation,
+            commands::knowledge_understanding::knowledge_validate_explanation,
+            commands::knowledge_understanding::knowledge_save_user_note,
+            commands::knowledge_understanding::knowledge_get_relations,
+            commands::knowledge::knowledge_compute_co_occurrence,
+            commands::conversion::check_markitdown_status,
+            commands::conversion::convert_asset_to_markdown,
         ])
         .run(tauri::generate_context!())
         .expect("NoteCapt 启动失败");

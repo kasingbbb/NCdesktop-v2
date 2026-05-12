@@ -18,6 +18,8 @@ interface AssetStore {
   /** 项目内各素材的标签名（与 assets 同步于 fetch） */
   assetTagNamesById: Record<string, string[]>;
   selectedAssetId: string | null;
+  /** 多选集合 — 框选 / Cmd+Click / Cmd+A 维护 */
+  selectedAssetIds: Set<string>;
   viewMode: AssetViewMode;
   sortConfig: SortConfig;
   isLoading: boolean;
@@ -37,6 +39,9 @@ interface AssetStore {
   deleteAsset: (id: string) => Promise<void>;
   toggleStar: (id: string) => Promise<void>;
   selectAsset: (id: string | null) => void;
+  toggleSelectAsset: (id: string) => void;
+  setSelectedAssetIds: (ids: Set<string>) => void;
+  clearSelection: () => void;
   setViewMode: (mode: AssetViewMode) => void;
   setSortConfig: (config: SortConfig) => void;
   getSelectedAsset: () => Asset | undefined;
@@ -47,6 +52,7 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
   assets: [],
   assetTagNamesById: {},
   selectedAssetId: null,
+  selectedAssetIds: new Set<string>(),
   viewMode: "grid",
   sortConfig: { field: "capturedAt", direction: "desc" },
   isLoading: false,
@@ -107,6 +113,18 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
   },
 
   selectAsset: (id) => set({ selectedAssetId: id }),
+
+  toggleSelectAsset: (id) =>
+    set((s) => {
+      const next = new Set(s.selectedAssetIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return { selectedAssetIds: next };
+    }),
+
+  setSelectedAssetIds: (ids) => set({ selectedAssetIds: ids }),
+
+  clearSelection: () => set({ selectedAssetIds: new Set<string>() }),
 
   setViewMode: (mode) => set({ viewMode: mode }),
 

@@ -11,6 +11,7 @@ import { DropzoneApp } from "./components/features/dropzone/DropzoneApp";
 import { useLibraryStore } from "./stores/libraryStore";
 import { useProjectStore } from "./stores/projectStore";
 import { useAssetStore } from "./stores/assetStore";
+import { useSettingsStore } from "./stores/settingsStore";
 import { logger } from "./utils/logger";
 
 interface ImportDropFinishedPayload {
@@ -55,6 +56,29 @@ export default function App() {
 
   useEffect(() => {
     logger.info("App", "Application mounted", { isDropzone });
+  }, [isDropzone]);
+
+  // 启动时加载持久化设置并应用主题
+  useEffect(() => {
+    if (isDropzone) return;
+    void useSettingsStore
+      .getState()
+      .loadSettings()
+      .then(() => {
+        const theme = useSettingsStore.getState().settings.theme;
+        if (theme === "dark") {
+          document.documentElement.setAttribute("data-theme", "dark");
+        } else if (theme === "light") {
+          document.documentElement.removeAttribute("data-theme");
+        } else {
+          const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+          if (prefersDark) {
+            document.documentElement.setAttribute("data-theme", "dark");
+          } else {
+            document.documentElement.removeAttribute("data-theme");
+          }
+        }
+      });
   }, [isDropzone]);
 
   useHydrateActiveProjectFromSettings();
