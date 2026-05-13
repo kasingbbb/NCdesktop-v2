@@ -39,7 +39,7 @@ export function Inspector({ width = 320 }: InspectorProps) {
       {/* Header: Segmented Control + 关闭 */}
       <div
         className="h-[48px] flex items-center justify-between px-[var(--space-3)] border-b shrink-0 gap-[var(--space-2)]"
-        style={{ borderColor: "var(--border-primary)" }}
+        style={{ borderColor: "var(--border-primary)", background: "var(--surface-primary)" }}
       >
         <div
           className="flex rounded-[var(--radius-full)] p-[3px] gap-[2px] flex-1 min-w-0"

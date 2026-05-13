@@ -1,5 +1,4 @@
 import { Settings, CreditCard, Box } from "lucide-react";
-import { SidebarItem } from "./SidebarItem";
 import { useSyncStore } from "../../stores/syncStore";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -11,24 +10,32 @@ export function SidebarFooter({ onSettingsOpen }: SidebarFooterProps) {
   const isTFCardConnected = useSyncStore((state) => state.isTFCardConnected);
 
   return (
-    <div className="px-[var(--space-3)] py-[var(--space-3)] border-t" style={{ borderColor: "var(--border-primary)" }}>
-      <SidebarItem
-        icon={<Settings size={16} />}
-        label="设置"
+    <div
+      className="px-[8px] py-[10px]"
+      style={{ borderTop: "1px solid var(--sidebar-divider)" }}
+    >
+      <div
+        className="flex items-center gap-[8px] px-[8px] py-[6px] rounded-[var(--radius-md)] cursor-pointer transition-all"
+        style={{ color: "var(--sidebar-text)" }}
         onClick={onSettingsOpen}
-      />
-      <SidebarItem
-        icon={<Box size={16} />}
-        label="悬浮导入"
-        onClick={() => {
-          invoke("toggle_dropzone_window").catch(console.error);
+        onMouseEnter={(e) => {
+          (e.currentTarget as HTMLElement).style.background = "var(--sidebar-hover-bg)";
         }}
-      />
-      <SidebarItem
-        icon={<CreditCard size={16} />}
-        label={isTFCardConnected ? "TF 卡已连接" : "未插入 TF 卡"}
-        className={isTFCardConnected ? "connected" : "opacity-50"}
-      />
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLElement).style.background = "transparent";
+        }}
+      >
+        <div
+          className="w-[26px] h-[26px] rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0"
+          style={{ background: "linear-gradient(135deg, #3b82f6, #6366f1)" }}
+        >
+          U
+        </div>
+        <div className="min-w-0">
+          <div className="text-[12px] font-medium" style={{ color: "var(--sidebar-text)" }}>用户</div>
+          <div className="text-[10px]" style={{ color: "var(--sidebar-text-dim)" }}>设置</div>
+        </div>
+      </div>
     </div>
   );
 }
