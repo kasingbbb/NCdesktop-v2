@@ -1,10 +1,15 @@
-import { Search, Plus, LayoutGrid, List, ArrowUpDown, ChevronLeft } from "lucide-react";
+import { Search, Plus, LayoutGrid, List, ChevronLeft, Loader2, PanelRight, Lightbulb } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
 import { useSearchStore } from "../../stores/searchStore";
 import { useLibraryStore } from "../../stores/libraryStore";
 import { useAssetStore } from "../../stores/assetStore";
+import { useUIStore } from "../../stores/uiStore";
 
-export function Toolbar() {
+interface ToolbarProps {
+  onSearchOpen?: () => void;
+}
+
+export function Toolbar({ onSearchOpen }: ToolbarProps) {
   const {
     viewMode: projectViewMode,
     setViewMode: setProjectViewMode,
@@ -16,70 +21,121 @@ export function Toolbar() {
   const assetViewMode = useAssetStore((s) => s.viewMode);
   const setAssetViewMode = useAssetStore((s) => s.setViewMode);
   const { activeLibraryId, ensureActiveLibrary } = useLibraryStore();
-  const { query, setQuery } = useSearchStore();
+  const { inspectorOpen, toggleInspector, setRightPanelMode } = useUIStore();
 
   const activeProject = activeProjectId ? getActiveProject() : undefined;
 
   if (activeProjectId && activeProject) {
     return (
       <div
-        className="h-[60px] flex items-center justify-between px-[var(--space-4)] border-b shrink-0 bg-[var(--surface-primary)]"
-        style={{ borderColor: "var(--border-primary)" }}
+        className="h-[52px] flex items-center justify-between px-[var(--space-4)] border-b shrink-0 bg-[var(--surface-primary)]"
+        style={{ borderColor: "var(--border-primary)", boxShadow: "var(--shadow-sm)" }}
       >
         <div className="flex items-center gap-[var(--space-3)] min-w-0">
           <button
             type="button"
-            className="btn-glass flex items-center gap-1 px-[var(--space-2)] py-1.5 rounded-[var(--radius-md)] shrink-0"
+            className="flex items-center gap-[4px] px-[var(--space-2)] py-1.5 rounded-[var(--radius-full)] transition-all text-[12px]"
+            style={{ color: "var(--text-secondary)", background: "transparent" }}
             onClick={() => setActiveProject(null)}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--surface-tertiary)"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
           >
-            <ChevronLeft size={18} />
-            <span className="text-[var(--text-sm)]">项目</span>
+            <ChevronLeft size={14} />
+            <span>项目</span>
           </button>
           <h2
-            className="text-[var(--text-lg)] font-semibold truncate"
+            className="text-[15px] font-semibold truncate"
             style={{ color: "var(--text-primary)" }}
             title={activeProject.name}
           >
             {activeProject.name}
           </h2>
         </div>
-        <div className="flex items-center gap-[var(--space-3)] shrink-0">
-          <p className="text-[var(--text-xs)] hidden sm:block max-w-[220px] leading-snug" style={{ color: "var(--text-tertiary)" }}>
-            左栏原件名 · 右栏工作区名与标签 · 列表/图标
-          </p>
+        <div className="flex items-center gap-[6px] shrink-0">
+          {/* 提取状态徽章 */}
           <div
-            className="flex rounded-[var(--radius-lg)] p-0.5 border"
-            style={{ borderColor: "var(--border-primary)", background: "var(--surface-tertiary)" }}
+            className="flex items-center gap-[4px] text-[11px] px-[8px] py-[3px] rounded-[var(--radius-md)]"
+            style={{
+              color: "var(--text-secondary)",
+              background: "var(--surface-secondary)",
+              border: "1px solid var(--border-primary)",
+            }}
+          >
+            <Loader2 size={12} className="animate-spin" />
+            提取中 2 个
+          </div>
+          {/* 知识关联按钮 */}
+          <button
+            type="button"
+            className="flex items-center gap-[4px] h-[28px] px-[8px] text-[11px] font-medium rounded-[var(--radius-full)] transition-all"
+            style={{
+              color: "var(--text-primary)",
+              background: "var(--surface-primary)",
+              border: "1px solid var(--border-primary)",
+              boxShadow: "var(--shadow-sm)",
+            }}
+            onClick={() => {
+              setRightPanelMode("knowledge_association");
+              if (!inspectorOpen) toggleInspector();
+            }}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.background = "var(--surface-secondary)";
+              (e.currentTarget as HTMLElement).style.borderColor = "var(--border-hover)";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.background = "var(--surface-primary)";
+              (e.currentTarget as HTMLElement).style.borderColor = "var(--border-primary)";
+            }}
+          >
+            <Lightbulb size={12} />
+            知识关联
+          </button>
+          {/* 视图切换 */}
+          <div
+            className="flex rounded-[var(--radius-lg)] p-[2px] gap-[1px]"
+            style={{ border: "1px solid var(--border-primary)", background: "var(--surface-tertiary)" }}
           >
             <button
               type="button"
-              className={`p-1.5 rounded-[var(--radius-md)] transition-colors border border-transparent ${assetViewMode === "grid" ? "border-app" : ""}`}
-              title="图标视图"
-              onClick={() => {
-                setAssetViewMode("grid");
-              }}
-              style={{
-                color: assetViewMode === "grid" ? "var(--text-primary)" : "var(--text-tertiary)",
-                background: assetViewMode === "grid" ? "var(--surface-primary)" : "transparent",
-              }}
-            >
-              <LayoutGrid size={16} />
-            </button>
-            <button
-              type="button"
-              className={`p-1.5 rounded-[var(--radius-md)] transition-colors border border-transparent ${assetViewMode === "list" ? "border-app" : ""}`}
+              className="w-[26px] h-[26px] flex items-center justify-center rounded-[var(--radius-sm)] transition-colors"
               title="列表视图"
-              onClick={() => {
-                setAssetViewMode("list");
-              }}
+              onClick={() => setAssetViewMode("list")}
               style={{
                 color: assetViewMode === "list" ? "var(--text-primary)" : "var(--text-tertiary)",
                 background: assetViewMode === "list" ? "var(--surface-primary)" : "transparent",
+                border: assetViewMode === "list" ? "1px solid var(--border-primary)" : "1px solid transparent",
+                boxShadow: assetViewMode === "list" ? "var(--shadow-sm)" : "none",
               }}
             >
-              <List size={16} />
+              <List size={13} />
+            </button>
+            <button
+              type="button"
+              className="w-[26px] h-[26px] flex items-center justify-center rounded-[var(--radius-sm)] transition-colors"
+              title="图标视图"
+              onClick={() => setAssetViewMode("grid")}
+              style={{
+                color: assetViewMode === "grid" ? "var(--text-primary)" : "var(--text-tertiary)",
+                background: assetViewMode === "grid" ? "var(--surface-primary)" : "transparent",
+                border: assetViewMode === "grid" ? "1px solid var(--border-primary)" : "1px solid transparent",
+                boxShadow: assetViewMode === "grid" ? "var(--shadow-sm)" : "none",
+              }}
+            >
+              <LayoutGrid size={13} />
             </button>
           </div>
+          {/* Inspector 切换 */}
+          <button
+            type="button"
+            className="w-[30px] h-[30px] flex items-center justify-center rounded-[var(--radius-md)] transition-colors"
+            title="Inspector"
+            onClick={toggleInspector}
+            style={{ color: inspectorOpen ? "var(--text-primary)" : "var(--text-tertiary)" }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--surface-tertiary)"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+          >
+            <PanelRight size={14} />
+          </button>
         </div>
       </div>
     );
@@ -87,31 +143,47 @@ export function Toolbar() {
 
   return (
     <div
-      className="h-[60px] flex items-center justify-between px-[var(--space-4)] border-b shrink-0 bg-[var(--surface-primary)]"
-      style={{ borderColor: "var(--border-primary)" }}
+      className="h-[52px] flex items-center justify-between px-[var(--space-4)] border-b shrink-0 bg-[var(--surface-primary)]"
+      style={{ borderColor: "var(--border-primary)", boxShadow: "var(--shadow-sm)" }}
     >
-      <div className="flex items-center gap-[var(--space-4)] flex-1">
-        <h2 className="text-[var(--text-lg)] font-semibold" style={{ color: "var(--text-primary)" }}>
-          Projects
+      <div className="flex items-center gap-[10px] flex-1 min-w-0">
+        <h2 className="text-[15px] font-semibold whitespace-nowrap" style={{ color: "var(--text-primary)" }}>
+          项目列表
         </h2>
-        
-        <div className="input-glass flex items-center gap-2 max-w-md w-full px-3 py-1.5 rounded-[var(--radius-md)]">
-          <Search size={16} style={{ color: "var(--text-tertiary)" }} />
-          <input 
-            type="text" 
-            placeholder="Search projects..." 
-            className="bg-transparent border-none outline-none w-full text-[var(--text-sm)]"
-            style={{ color: "var(--text-primary)" }}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+        {/* 搜索栏 — 点击打开 ⌘K Command Palette */}
+        <div
+          className="flex items-center gap-[7px] px-[12px] h-[30px] min-w-[180px] max-w-[280px] flex-1 rounded-[var(--radius-full)] cursor-pointer transition-all"
+          style={{
+            background: "var(--surface-secondary)",
+            border: "1px solid var(--border-primary)",
+          }}
+          onClick={onSearchOpen}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-hover)"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-primary)"; }}
+        >
+          <Search size={12} style={{ color: "var(--text-tertiary)" }} />
+          <span className="text-[12px] flex-1" style={{ color: "var(--text-tertiary)" }}>
+            搜索项目…
+          </span>
+          <span
+            className="text-[10px] px-[5px] py-[1px] rounded-[3px] shrink-0 whitespace-nowrap font-mono"
+            style={{
+              color: "var(--text-tertiary)",
+              background: "var(--surface-tertiary)",
+              border: "1px solid var(--border-primary)",
+            }}
+          >
+            ⌘K
+          </span>
         </div>
       </div>
 
-      <div className="flex items-center gap-[var(--space-2)]">
-        <button 
-          className="btn-glass px-[var(--space-3)] py-1.5 rounded-[var(--radius-md)] flex items-center gap-2"
-          style={{ background: "var(--brand-navy)", color: "#ffffff" }}
+      <div className="flex items-center gap-[6px] shrink-0">
+        <button
+          className="flex items-center gap-[5px] h-[30px] px-[12px] text-[12px] font-medium rounded-[var(--radius-full)] transition-all"
+          style={{ background: "var(--brand-navy)", color: "#fff", border: "1px solid var(--brand-navy)" }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--brand-navy-light)"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--brand-navy)"; }}
           onClick={() => {
             void (async () => {
               const libId = activeLibraryId ?? (await ensureActiveLibrary());
@@ -122,38 +194,38 @@ export function Toolbar() {
             })();
           }}
         >
-          <Plus size={16} />
-          <span className="text-[var(--text-sm)] font-medium">New</span>
+          <Plus size={13} />
+          新建
         </button>
-
-        <div className="w-px h-6 mx-[var(--space-2)]" style={{ background: "var(--border-primary)" }} />
-
-        <button className="p-1.5 rounded-[var(--radius-md)] transition-colors" style={{ color: "var(--text-secondary)" }}>
-          <ArrowUpDown size={16} />
-        </button>
-
-        <div className="flex rounded-[var(--radius-lg)] p-0.5 border" style={{ borderColor: "var(--border-primary)", background: "var(--surface-tertiary)" }}>
-          <button 
+        <div
+          className="flex rounded-[var(--radius-lg)] p-[2px] gap-[1px]"
+          style={{ border: "1px solid var(--border-primary)", background: "var(--surface-tertiary)" }}
+        >
+          <button
             type="button"
-            className={`p-1 rounded-[var(--radius-md)] transition-colors border border-transparent ${projectViewMode === 'grid' ? 'border-app' : ''}`}
-            onClick={() => setProjectViewMode('grid')}
-            style={{ 
-              color: projectViewMode === 'grid' ? "var(--text-primary)" : "var(--text-tertiary)",
-              background: projectViewMode === 'grid' ? "var(--surface-primary)" : "transparent",
+            className="w-[26px] h-[26px] flex items-center justify-center rounded-[var(--radius-sm)] transition-colors"
+            onClick={() => setProjectViewMode("grid")}
+            style={{
+              color: projectViewMode === "grid" ? "var(--text-primary)" : "var(--text-tertiary)",
+              background: projectViewMode === "grid" ? "var(--surface-primary)" : "transparent",
+              border: projectViewMode === "grid" ? "1px solid var(--border-primary)" : "1px solid transparent",
+              boxShadow: projectViewMode === "grid" ? "var(--shadow-sm)" : "none",
             }}
           >
-            <LayoutGrid size={16} />
+            <LayoutGrid size={13} />
           </button>
-          <button 
+          <button
             type="button"
-            className={`p-1 rounded-[var(--radius-md)] transition-colors border border-transparent ${projectViewMode === 'list' ? 'border-app' : ''}`}
-            onClick={() => setProjectViewMode('list')}
-            style={{ 
-              color: projectViewMode === 'list' ? "var(--text-primary)" : "var(--text-tertiary)",
-              background: projectViewMode === 'list' ? "var(--surface-primary)" : "transparent",
+            className="w-[26px] h-[26px] flex items-center justify-center rounded-[var(--radius-sm)] transition-colors"
+            onClick={() => setProjectViewMode("list")}
+            style={{
+              color: projectViewMode === "list" ? "var(--text-primary)" : "var(--text-tertiary)",
+              background: projectViewMode === "list" ? "var(--surface-primary)" : "transparent",
+              border: projectViewMode === "list" ? "1px solid var(--border-primary)" : "1px solid transparent",
+              boxShadow: projectViewMode === "list" ? "var(--shadow-sm)" : "none",
             }}
           >
-            <List size={16} />
+            <List size={13} />
           </button>
         </div>
       </div>

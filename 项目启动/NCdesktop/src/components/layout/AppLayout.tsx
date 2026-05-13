@@ -98,7 +98,7 @@ export function AppLayout({
           </>
         )}
 
-        <ContentArea />
+        <ContentArea onSearchOpen={onSearchOpen} />
 
         {showInspector && (
           <>

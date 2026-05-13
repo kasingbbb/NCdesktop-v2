@@ -6,7 +6,11 @@ import { AssetListView } from "../features/AssetListView";
 import { AssetPreview } from "../features/AssetPreview";
 import { CalendarWeekView } from "../features/calendar/CalendarWeekView";
 
-export function ContentArea() {
+interface ContentAreaProps {
+  onSearchOpen?: () => void;
+}
+
+export function ContentArea({ onSearchOpen }: ContentAreaProps) {
   const { activeSidebarSection, inspectorOpen, rightPanelMode } = useUIStore();
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
 
@@ -20,7 +24,6 @@ export function ContentArea() {
     );
   }
 
-  // Route to different views based on sidebar selection
   const isLibraryView = ["projects", "recent", "search", "starred"].includes(activeSidebarSection);
 
   if (isLibraryView) {
@@ -35,7 +38,7 @@ export function ContentArea() {
             boxShadow: "var(--shadow-float)",
           }}
         >
-          <Toolbar />
+          <Toolbar onSearchOpen={onSearchOpen} />
           {activeProjectId ? <AssetListView /> : <ProjectListView />}
         </div>
       </main>
@@ -44,10 +47,7 @@ export function ContentArea() {
 
   return (
     <main className="flex-1 flex flex-col h-full min-w-0 overflow-hidden p-[var(--space-4)] bg-[var(--surface-canvas)]">
-      {/* 上半：素材预览区 */}
       <AssetPreview />
-
-      {/* 下半：时间轴区域占位 */}
       <div
         className="h-[180px] shrink-0 border-t"
         style={{
@@ -56,10 +56,7 @@ export function ContentArea() {
         }}
       >
         <div className="flex items-center justify-center h-full">
-          <p
-            className="text-[var(--text-sm)]"
-            style={{ color: "var(--text-tertiary)" }}
-          >
+          <p className="text-[var(--text-sm)]" style={{ color: "var(--text-tertiary)" }}>
             Recording Axis — 时间轴将在此渲染
           </p>
         </div>

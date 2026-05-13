@@ -10,11 +10,17 @@
   box-shadow: var(--shadow-float);
 }
 
-/* ─── 侧边栏 ─── */
+/* ─── 侧边栏（深色驾驶舱） ─── */
 .glass-sidebar {
-  background: var(--surface-secondary);
-  border-right: 1px solid var(--border-primary);
-  box-shadow: 2px 0 12px -4px rgba(15, 23, 42, 0.04);
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--sidebar-border);
+  box-shadow: 2px 0 12px -4px rgba(0, 0, 0, 0.15);
+}
+
+/* ─── 标题栏（与侧栏同色系） ─── */
+.glass-titlebar {
+  background: var(--sidebar-bg);
+  border-bottom: 1px solid var(--sidebar-border);
 }
 
 /* ─── 工具栏 / 标题栏 ─── */
@@ -143,18 +149,20 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: 7px var(--space-2);
   font-size: var(--text-sm);
-  color: var(--text-secondary);
+  color: var(--sidebar-text-muted);
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: all var(--duration-fast) var(--ease-out-expo);
   position: relative;
+  border: none;
+  background: none;
 }
 
 .sidebar-item:hover {
-  background: var(--surface-tertiary);
-  color: var(--text-primary);
+  background: var(--sidebar-hover-bg);
+  color: var(--sidebar-text);
 }
 
 .sidebar-item.active {
@@ -164,12 +172,19 @@
 }
 
 .sidebar-item .sidebar-item-icon {
-  color: var(--text-secondary);
-  transition: color var(--duration-fast) var(--ease-out-expo);
+  color: var(--sidebar-text-muted);
+  opacity: 0.7;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+}
+
+.sidebar-item:hover .sidebar-item-icon {
+  color: var(--sidebar-text);
+  opacity: 1;
 }
 
 .sidebar-item.active .sidebar-item-icon {
   color: var(--sidebar-active-fg);
+  opacity: 1;
 }
 
 /* ═══════════════════════════════════════════════════════

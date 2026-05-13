@@ -1,4 +1,4 @@
-import { Clock, Star, CalendarDays, Network, Sun } from "lucide-react";
+import { Clock, Star, CalendarDays, Network, Sun, Search, Lightbulb, FolderOpen } from "lucide-react";
 import { SidebarItem, SidebarSection } from "./SidebarItem";
 import { ProjectTree } from "../features/ProjectTree";
 import { TagTree } from "../features/TagTree";
@@ -12,7 +12,7 @@ interface SidebarProps {
   onSearchOpen?: () => void;
 }
 
-export function Sidebar({ width, onSettingsOpen }: SidebarProps) {
+export function Sidebar({ width, onSettingsOpen, onSearchOpen }: SidebarProps) {
   const { activeSidebarSection, setSidebarSection } = useUIStore();
   const { showLearningFeatures } = useEffectiveLearningSettings();
 
@@ -22,65 +22,81 @@ export function Sidebar({ width, onSettingsOpen }: SidebarProps) {
       style={{ width: `${width}px` }}
     >
       {/* 品牌标识区 */}
-      <div className="pt-[60px] px-[var(--space-4)] pb-[var(--space-3)]">
-        <h1
-          className="text-[var(--text-lg)] font-bold tracking-[var(--tracking-tight)]"
-          style={{ color: "var(--brand-navy)" }}
+      <div className="pt-[60px] px-[14px] pb-[10px] flex items-center gap-[8px]">
+        <div
+          className="w-[26px] h-[26px] rounded-[6px] flex items-center justify-center shrink-0 text-[13px] font-bold text-white"
+          style={{ background: "rgba(255,255,255,0.08)" }}
         >
-          NoteCapt
-        </h1>
-        <p
-          className="text-[var(--text-xs)] mt-[var(--space-1)] uppercase tracking-[0.1em]"
-          style={{ color: "var(--text-secondary)" }}
-        >
-          Knowledge Library
-        </p>
+          N
+        </div>
+        <div>
+          <div className="text-[13px] font-bold text-white leading-tight">NoteCapt</div>
+          <div
+            className="text-[9px] uppercase tracking-[0.08em]"
+            style={{ color: "var(--sidebar-text-dim)" }}
+          >
+            Knowledge
+          </div>
+        </div>
       </div>
 
-      {/* 导航列表 */}
-      <nav className="flex-1 overflow-y-auto px-[var(--space-2)] py-[var(--space-1)]">
-        <SidebarSection title="工作区">
-          <SidebarItem
-            icon={<Clock size={16} />}
-            label="最近"
-            active={activeSidebarSection === "recent"}
-            onClick={() => setSidebarSection("recent")}
-          />
-          <SidebarItem
-            icon={<Star size={16} />}
-            label="收藏"
-            active={activeSidebarSection === "starred"}
-            onClick={() => setSidebarSection("starred")}
-          />
-        </SidebarSection>
+      <div className="h-px mx-0" style={{ background: "var(--sidebar-divider)" }} />
 
-        <SidebarSection title="知识">
+      {/* 导航列表 */}
+      <nav className="flex-1 overflow-y-auto px-[8px] py-[4px]">
+        <SidebarItem
+          icon={<Search size={14} />}
+          label="搜索"
+          onClick={onSearchOpen}
+        />
+        <SidebarItem
+          icon={<FolderOpen size={14} />}
+          label="项目"
+          active={activeSidebarSection === "projects"}
+          onClick={() => setSidebarSection("projects")}
+        />
+        <SidebarItem
+          icon={<Clock size={14} />}
+          label="最近"
+          active={activeSidebarSection === "recent"}
+          onClick={() => setSidebarSection("recent")}
+        />
+        <SidebarItem
+          icon={<Star size={14} />}
+          label="收藏"
+          active={activeSidebarSection === "starred"}
+          onClick={() => setSidebarSection("starred")}
+        />
+        <SidebarItem
+          icon={<CalendarDays size={14} />}
+          label="日历"
+          active={activeSidebarSection === "calendar"}
+          onClick={() => setSidebarSection("calendar")}
+        />
+
+        <div className="h-px my-[6px]" style={{ background: "var(--sidebar-divider)" }} />
+        <SidebarSection title="知识系统">
+          {showLearningFeatures && (
+            <SidebarItem
+              icon={<Sun size={14} />}
+              label="今日复习"
+              badge={3}
+              active={activeSidebarSection === "today"}
+              onClick={() => setSidebarSection("today")}
+            />
+          )}
           <SidebarItem
-            icon={<Network size={16} />}
-            label="知识中心"
+            icon={<Lightbulb size={14} />}
+            label="知识库"
             active={activeSidebarSection === "knowledge-hub"}
             onClick={() => setSidebarSection("knowledge-hub")}
           />
         </SidebarSection>
 
-        {showLearningFeatures ? (
-          <SidebarSection title="学习中心" titleColor="var(--sidebar-group-learning)">
-            <SidebarItem
-              icon={<Sun size={16} />}
-              label="今日"
-              active={activeSidebarSection === "today"}
-              onClick={() => setSidebarSection("today")}
-            />
-            <SidebarItem
-              icon={<CalendarDays size={16} />}
-              label="日历"
-              active={activeSidebarSection === "calendar"}
-              onClick={() => setSidebarSection("calendar")}
-            />
-          </SidebarSection>
-        ) : null}
-
-        <ProjectTree />
+        <div className="h-px my-[6px]" style={{ background: "var(--sidebar-divider)" }} />
+        <SidebarSection title="项目">
+          <ProjectTree />
+        </SidebarSection>
 
         <TagTree />
       </nav>
