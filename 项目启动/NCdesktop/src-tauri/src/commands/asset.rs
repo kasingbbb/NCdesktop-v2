@@ -221,3 +221,137 @@ pub fn get_drag_icon_path(app: tauri::AppHandle) -> Result<String, String> {
         Ok(path.to_string_lossy().to_string())
     }
 }
+
+/// 跨项目移动素材（BatchToolbar"移动到"路径）。
+#[tauri::command]
+pub fn move_assets(
+    database: State<'_, Database>,
+    asset_ids: Vec<String>,
+    target_project_id: String,
+) -> Result<Vec<models::Asset>, String> {
+    let target_dir = workspace::ensure_project_workspace(&target_project_id)?;
+
+    let conn = database
+        .conn
+        .lock()
+        .map_err(|e| format!("数据库锁获取失败: {e}"))?;
+
+    db::project::get_by_id(&conn, &target_project_id)?
+        .ok_or_else(|| format!("目标项目不存在: {target_project_id}"))?;
+
+    let mut planned: Vec<(String, bool, PathBuf, PathBuf)> = Vec::new();
+    for id in &asset_ids {
+        let asset = db::asset::get_by_id(&conn, id)?
+            .ok_or_else(|| format!("素材不存在: {id}"))?;
+        if asset.project_id == target_project_id {
+            planned.push((asset.id, true, PathBuf::new(), PathBuf::new()));
+            continue;
+        }
+        let src = PathBuf::from(&asset.file_path);
+        let file_name = src
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| format!("非法文件名: {}", asset.file_path))?
+            .to_string();
+        let dest = unique_path(&target_dir, &file_name);
+        planned.push((asset.id, false, src, dest));
+    }
+
+    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for (_id, skip, src, dest) in &planned {
+        if *skip {
+            continue;
+        }
+        if src.exists() {
+            if let Err(e) = fs::rename(src, dest) {
+                for (orig, target) in moved.iter().rev() {
+                    let _ = fs::rename(target, orig);
+                }
+                return Err(format!("移动失败 {:?} → {:?}: {e}", src, dest));
+            }
+            moved.push((src.clone(), dest.clone()));
+        }
+    }
+
+    let mut result: Vec<models::Asset> = Vec::with_capacity(planned.len());
+    for (id, skip, _src, dest) in &planned {
+        if !*skip {
+            let dest_str = dest.to_string_lossy().to_string();
+            db::asset::update_project_and_path(&conn, id, &target_project_id, &dest_str)?;
+        }
+        let updated = db::asset::get_by_id(&conn, id)?
+            .ok_or_else(|| format!("移动后读取素材失败: {id}"))?;
+        result.push(updated);
+    }
+    Ok(result)
+}
+
+/// 跨项目复制素材（BatchToolbar"复制到"路径）。
+#[tauri::command]
+pub fn copy_assets(
+    database: State<'_, Database>,
+    asset_ids: Vec<String>,
+    target_project_id: String,
+) -> Result<Vec<models::Asset>, String> {
+    let target_dir = workspace::ensure_project_workspace(&target_project_id)?;
+
+    let conn = database
+        .conn
+        .lock()
+        .map_err(|e| format!("数据库锁获取失败: {e}"))?;
+
+    db::project::get_by_id(&conn, &target_project_id)?
+        .ok_or_else(|| format!("目标项目不存在: {target_project_id}"))?;
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut planned: Vec<(models::Asset, PathBuf, PathBuf)> = Vec::new();
+    for id in &asset_ids {
+        let asset = db::asset::get_by_id(&conn, id)?
+            .ok_or_else(|| format!("素材不存在: {id}"))?;
+        let src = PathBuf::from(&asset.file_path);
+        let file_name = src
+            .file_name()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| format!("非法文件名: {}", asset.file_path))?
+            .to_string();
+        let dest = unique_path(&target_dir, &file_name);
+        planned.push((asset, src, dest));
+    }
+
+    let mut copied: Vec<PathBuf> = Vec::new();
+    for (_asset, src, dest) in &planned {
+        if src.exists() {
+            if let Err(e) = fs::copy(src, dest) {
+                for d in copied.iter().rev() {
+                    let _ = fs::remove_file(d);
+                }
+                return Err(format!("复制失败 {:?} → {:?}: {e}", src, dest));
+            }
+            copied.push(dest.clone());
+        }
+    }
+
+    let mut result: Vec<models::Asset> = Vec::with_capacity(planned.len());
+    for (orig, _src, dest) in planned.into_iter() {
+        let new_asset = models::Asset {
+            id: uuid::Uuid::new_v4().to_string(),
+            project_id: target_project_id.clone(),
+            asset_type: orig.asset_type,
+            name: orig.name,
+            original_name: orig.original_name,
+            file_path: dest.to_string_lossy().to_string(),
+            file_size: orig.file_size,
+            mime_type: orig.mime_type,
+            captured_at: orig.captured_at,
+            imported_at: now.clone(),
+            source_type: orig.source_type,
+            source_data: orig.source_data,
+            is_starred: false,
+            source_asset_id: None,
+            derivative_version: 0,
+        };
+        db::asset::insert(&conn, &new_asset)?;
+        result.push(new_asset);
+    }
+    Ok(result)
+}

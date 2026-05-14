@@ -65,6 +65,8 @@ pub fn run() {
             commands::asset::toggle_asset_star,
             commands::asset::get_asset_analysis,
             commands::asset::move_asset_to_workspace_folder,
+            commands::asset::move_assets,
+            commands::asset::copy_assets,
             commands::asset::get_drag_icon_path,
             commands::timeline::get_timeline,
             commands::timeline::create_timeline,

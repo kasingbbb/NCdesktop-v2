@@ -137,6 +137,22 @@ export async function moveAssetToWorkspaceFolder(
   });
 }
 
+/** 跨项目移动素材（BatchToolbar"移动到"路径）。返回更新后的素材行。 */
+export async function moveAssets(
+  assetIds: string[],
+  targetProjectId: string
+): Promise<Asset[]> {
+  return invoke<Asset[]>("move_assets", { assetIds, targetProjectId });
+}
+
+/** 跨项目复制素材（BatchToolbar"复制到"路径）。返回新插入的素材行。 */
+export async function copyAssets(
+  assetIds: string[],
+  targetProjectId: string
+): Promise<Asset[]> {
+  return invoke<Asset[]>("copy_assets", { assetIds, targetProjectId });
+}
+
 // ── MarkItDown 转换 ────────────────────────────────
 
 export interface MarkitdownStatus {

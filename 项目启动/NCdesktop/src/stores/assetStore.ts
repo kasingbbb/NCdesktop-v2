@@ -42,6 +42,8 @@ interface AssetStore {
   toggleSelectAsset: (id: string) => void;
   setSelectedAssetIds: (ids: Set<string>) => void;
   clearSelection: () => void;
+  moveAssets: (assetIds: string[], targetProjectId: string) => Promise<void>;
+  copyAssets: (assetIds: string[], targetProjectId: string) => Promise<void>;
   setViewMode: (mode: AssetViewMode) => void;
   setSortConfig: (config: SortConfig) => void;
   getSelectedAsset: () => Asset | undefined;
@@ -125,6 +127,22 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
   setSelectedAssetIds: (ids) => set({ selectedAssetIds: ids }),
 
   clearSelection: () => set({ selectedAssetIds: new Set<string>() }),
+
+  moveAssets: async (assetIds, targetProjectId) => {
+    await cmd.moveAssets(assetIds, targetProjectId);
+    set((s) => ({
+      assets: s.assets.filter((a) => !assetIds.includes(a.id)),
+      selectedAssetIds: new Set<string>(),
+      selectedAssetId: assetIds.includes(s.selectedAssetId ?? "")
+        ? null
+        : s.selectedAssetId,
+    }));
+  },
+
+  copyAssets: async (assetIds, targetProjectId) => {
+    await cmd.copyAssets(assetIds, targetProjectId);
+    set({ selectedAssetIds: new Set<string>() });
+  },
 
   setViewMode: (mode) => set({ viewMode: mode }),
 
