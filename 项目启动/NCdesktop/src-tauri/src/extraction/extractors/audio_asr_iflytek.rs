@@ -281,6 +281,16 @@ async fn submit_task(file_path: &Path, language: &str) -> Result<String, Extract
     let stream = tokio_util::io::ReaderStream::new(file);
     let body = reqwest::Body::wrap_stream(stream);
 
+    log::info!(
+        "[讯飞 ASR] 发送上传请求：lang={} sigLen={} url={}{}?{}…",
+        language,
+        sig.len(),
+        IFLYTEK_BASE_URL,
+        UPLOAD_PATH,
+        &query.chars().take(80).collect::<String>()
+    );
+
+    let send_started = std::time::Instant::now();
     let resp = client
         .post(&url)
         .header("Content-Type", "application/octet-stream")
@@ -289,27 +299,53 @@ async fn submit_task(file_path: &Path, language: &str) -> Result<String, Extract
         .body(body)
         .send()
         .await
-        .map_err(|e| ExtractionError::OcrError(format!("讯飞上传请求失败: {e}")))?;
+        .map_err(|e| {
+            let elapsed = send_started.elapsed();
+            log::error!(
+                "[讯飞 ASR] 上传请求失败（{:.1}s 后）: {e}",
+                elapsed.as_secs_f32()
+            );
+            ExtractionError::OcrError(format!("讯飞上传请求失败: {e}"))
+        })?;
 
     let http_status = resp.status();
+    log::info!(
+        "[讯飞 ASR] 上传响应 HTTP {} 耗时 {:.1}s",
+        http_status,
+        send_started.elapsed().as_secs_f32()
+    );
     let raw = resp
         .text()
         .await
         .map_err(|e| ExtractionError::OcrError(format!("讯飞上传响应读取失败: {e}")))?;
 
     if !http_status.is_success() {
+        log::error!(
+            "[讯飞 ASR] 上传返回非 2xx HTTP {http_status}，响应体（前 500 字符）: {}",
+            raw.chars().take(500).collect::<String>()
+        );
         return Err(ExtractionError::OcrError(format!(
             "讯飞上传失败 HTTP {http_status}，响应: {raw}"
         )));
     }
 
     let parsed: UploadResponse = serde_json::from_str(&raw).map_err(|e| {
+        log::error!(
+            "[讯飞 ASR] 上传响应 JSON 解析失败: {e}，原始内容（前 500 字符）: {}",
+            raw.chars().take(500).collect::<String>()
+        );
         ExtractionError::OcrError(format!(
             "讯飞上传响应解析失败: {e}，原始内容: {raw}"
         ))
     })?;
 
     if parsed.code != "000000" {
+        log::error!(
+            "[讯飞 ASR] 业务错误 code={} desc={} raw={}",
+            parsed.code,
+            parsed.desc_info,
+            raw.chars().take(500).collect::<String>()
+        );
         return Err(ExtractionError::OcrError(format!(
             "讯飞上传错误 code={}: {}，原始响应: {raw}",
             parsed.code, parsed.desc_info

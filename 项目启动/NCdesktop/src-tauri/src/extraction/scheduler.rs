@@ -445,6 +445,14 @@ impl PipelineScheduler {
                                 Ok(_) => "提取成功但结构化内容为空".to_string(),
                                 Err(e) => e.to_string(),
                             };
+                            // 把真实失败原因打到日志，避免下游只看到 code=conversion_error
+                            // 排查不到根因。primary_name / asset_id 一并带上方便定位。
+                            log::warn!(
+                                "调度器：提取失败 asset={} primary={} reason={}",
+                                asset.id,
+                                primary_name,
+                                error_msg
+                            );
                             let is_terminal = task.retry_count + 1 >= task.max_retries;
                             db_handle_task_error(
                                 &app, &task.id, &task.asset_id,
