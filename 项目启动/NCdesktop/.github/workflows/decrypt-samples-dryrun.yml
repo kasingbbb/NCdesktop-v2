@@ -1,0 +1,64 @@
+# PENDING-PM: 替换 <SAMPLES_REPO_URL> / <ORG>/<SAMPLES_REPO_NAME> / SAMPLES_DEPLOY_KEY 为 PM 指派的实际值。
+# 用途：演示 CI 用 MARKITDOWN_SAMPLES_KEY secret 解密私有 samples-private 仓的能力（dry-run）。
+# 不上传任何明文 artifact；只统计文件数，验证 ≥ 35（AC-4 阈值）。
+name: Decrypt Samples Dry-Run
+
+on:
+  workflow_dispatch:
+
+jobs:
+  decrypt-and-count:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main repo (for scripts/decrypt-samples.sh)
+        uses: actions/checkout@v4
+
+      - name: Checkout samples-private (private)
+        uses: actions/checkout@v4
+        with:
+          # PENDING-PM: 填实际 repo
+          repository: <ORG>/<SAMPLES_REPO_NAME>
+          ssh-key: ${{ secrets.SAMPLES_DEPLOY_KEY }}
+          path: samples-private
+          lfs: true
+
+      - name: Sanity check key secret presence
+        env:
+          KEY: ${{ secrets.MARKITDOWN_SAMPLES_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::MARKITDOWN_SAMPLES_KEY secret not set"
+            exit 1
+          fi
+          echo "Key length: ${#KEY} (value not printed)"
+
+      - name: Decrypt to ephemeral tmp dir
+        env:
+          MARKITDOWN_SAMPLES_KEY: ${{ secrets.MARKITDOWN_SAMPLES_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/decrypted"
+          # 复制加密文件到 tmp（避免污染 workspace），再原地解密
+          cp -r samples-private/. "$RUNNER_TEMP/decrypted/"
+          bash scripts/decrypt-samples.sh "$RUNNER_TEMP/decrypted"
+
+      - name: Count decrypted files (excluding .enc / .meta.json / .git)
+        run: |
+          set -euo pipefail
+          COUNT=$(find "$RUNNER_TEMP/decrypted" -type f \
+            ! -name '*.enc' ! -name '*.meta.json' \
+            ! -path '*/.git/*' ! -path '*/.gitattributes' \
+            | wc -l | tr -d ' ')
+          echo "Decrypted file count: $COUNT"
+          if [ "$COUNT" -lt 35 ]; then
+            echo "::error::Expected ≥35 decrypted files, got $COUNT"
+            exit 1
+          fi
+          echo "::notice::AC-4 threshold satisfied: $COUNT ≥ 35"
+
+      - name: Scrub plaintext (ensure no artifact leaks)
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/decrypted" || true
+          echo "Plaintext scrubbed."

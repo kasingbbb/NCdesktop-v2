@@ -37,6 +37,7 @@ pub async fn export_project_markdown(
         .ok_or_else(|| "项目不存在".to_string())?;
 
     let timeline = db::timeline::get_timeline_by_project(&conn, &options.project_id)?;
+    #[allow(deprecated)] // 导出场景需要完整 asset 列（含 derivative），与工作区视图不同
     let assets = db::asset::get_by_project(&conn, &options.project_id).unwrap_or_default();
     let notes = db::note::get_by_project(&conn, &options.project_id).unwrap_or_default();
     let tags = db::tag::get_all(&conn).unwrap_or_default();

@@ -17,3 +17,6 @@ pub mod knowledge;
 pub mod knowledge_units;
 pub mod knowledge_synthesis;
 pub mod conversion;
+pub mod extraction;
+pub mod outbound;
+pub mod source_view;

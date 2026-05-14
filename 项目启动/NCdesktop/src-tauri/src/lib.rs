@@ -7,9 +7,14 @@ pub mod sync;
 pub mod audio;
 pub mod llm;
 pub mod workspace;
-// macos 模块依赖 Swift FFI 静态库（ocr_bridge / asr_bridge），build.rs 未编译它们，暂不激活
-// pub mod macos;
+#[cfg(target_os = "macos")]
+pub mod macos;
 pub mod extraction;
+pub mod source_scan;
+// task_008（M-1 关闭）：scheduler::write_derivative_md 通过 crate::utils::safe_name
+// 引用 sanitize_stem。utils 目录中的文件早已存在但 lib.rs 未注册，与 scheduler
+// 自身被注释属同一类"注册缺口"。
+pub mod utils;
 
 /// 自动化测试专用：初始化日志、统一 `[TEST]` 前缀（仅 `cargo test` 编译）
 #[cfg(test)]
@@ -41,6 +46,82 @@ pub fn run() {
 
             app.manage(database);
 
+            // task_011 FIX BLOCKER：PipelineScheduler 须在 setup 阶段 manage，
+            // 否则 `app.state::<PipelineScheduler>()`（如 retrigger_extraction:111）
+            // 在运行时会 panic（Tauri Manager::state 在 T 未注册时直接 panic）。
+            app.manage(extraction::scheduler::PipelineScheduler::new());
+
+            // task_007 / ADR-010：启动期一次性 runtime-manifest 自检。
+            // 读 Resources/runtime-manifest.json + 7 imports 探测 → 缓存到 AppState。
+            // 自检失败不 panic（保护离线开发态 / 未生成 manifest 的 dev 启动）；
+            // 失败码缓存供 UI banner 与后续 markitdown/scheduler 路由前短路消费。
+            let runtime_check_result = extraction::runtime_check::verify_runtime_manifest(app.handle());
+            match &runtime_check_result {
+                Ok(m) => log::info!(
+                    "runtime self-check PASS: runtime_id={} markitdown={} imports={}",
+                    m.runtime_id,
+                    m.markitdown.version,
+                    m.imports.len()
+                ),
+                Err(code) => log::warn!(
+                    "runtime self-check FAIL: code={} （UI 应禁用所有转录入口）",
+                    code
+                ),
+            }
+            app.manage(extraction::runtime_check::RuntimeCheckState::new(
+                runtime_check_result,
+            ));
+
+            // Boot-time 恢复：scheduler 采用懒启动，但若 DB 中有上次进程留下的
+            // queued/running 任务（崩溃或正常退出后未处理完），必须在启动时
+            // 唤醒一次，否则这些任务将永远停留在 queued。
+            //   1) running → queued（崩溃恢复）
+            //   2) 若仍有 queued 任务，触发一次 scheduler.start()
+            let needs_wake = {
+                let db = app.state::<Database>();
+                let lock_result = db.conn.lock();
+                match lock_result {
+                    Ok(conn) => {
+                        if let Err(e) = db::extraction::reset_running_tasks(&conn) {
+                            log::warn!("启动期重置 running 任务失败: {}", e);
+                        }
+                        match db::extraction::get_pipeline_stats(&conn) {
+                            Ok(stats) => stats.queued > 0,
+                            Err(e) => {
+                                log::warn!("启动期查询管线统计失败: {}", e);
+                                false
+                            }
+                        }
+                    }
+                    Err(_) => false,
+                }
+            };
+            if needs_wake {
+                let app_handle = app.handle().clone();
+                log::info!("启动期检测到 queued 任务，唤醒调度循环");
+                // setup() 同步上下文里 tokio runtime 尚未绑定为线程局部默认，直接调用
+                // scheduler.start() 内部的 tokio::spawn 会 panic（no reactor）。
+                // 通过 tauri::async_runtime::spawn 进入受管 runtime 再启动调度循环。
+                tauri::async_runtime::spawn(async move {
+                    let scheduler =
+                        app_handle.state::<extraction::scheduler::PipelineScheduler>();
+                    scheduler.start(app_handle.clone());
+                });
+            }
+
+            // task_007 / ADR-004：注册 SourceMissingSet 内存态，并异步扫描所有
+            // root assets 的 source 是否存在；扫描在 tauri::async_runtime 内进行，
+            // 绝不阻塞 setup hook。失败仅 warn。
+            app.manage(source_scan::SourceMissingSet::new());
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = source_scan::scan_all_projects(&app_handle) {
+                        log::warn!("[source_scan] 启动期扫描失败: {e}");
+                    }
+                });
+            }
+
             log::info!("NoteCapt 数据库已初始化: {:?}", db_path);
             Ok(())
         })
@@ -61,10 +142,13 @@ pub fn run() {
             commands::asset::get_asset,
             commands::asset::create_asset,
             commands::asset::update_asset,
+            commands::asset::rename_asset,
             commands::asset::delete_asset,
             commands::asset::toggle_asset_star,
             commands::asset::get_asset_analysis,
             commands::asset::move_asset_to_workspace_folder,
+            commands::asset::move_assets,
+            commands::asset::copy_assets,
             commands::asset::get_drag_icon_path,
             commands::timeline::get_timeline,
             commands::timeline::create_timeline,
@@ -144,6 +228,13 @@ pub fn run() {
             commands::knowledge_units::ku_create_snapshot,
             commands::conversion::check_markitdown_status,
             commands::conversion::convert_asset_to_markdown,
+            commands::conversion::get_conversion_meta,
+            commands::extraction::retrigger_extraction,
+            commands::extraction::retry_asset_conversion,
+            commands::outbound::prepare_outbound_payload,
+            commands::source_view::reveal_source_file,
+            #[cfg(debug_assertions)]
+            source_scan::source_scan_get_missing,
         ])
         .run(tauri::generate_context!())
         .expect("NoteCapt 启动失败");

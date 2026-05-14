@@ -123,3 +123,100 @@ describe("TagTree — task_008 F-P0-11", () => {
     expect(screen.getByText(/暂无标签/)).toBeTruthy();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v1.3 task_006 SB-05：默认折叠 + 过滤输入框（ADR-006 决断为按 PRD 走过滤模式；
+// 上方 task_008 F-P0-11 "前 20 + 更多" 契约由后续独立 task 处理，本次保留在既有
+// broken 清单内不修）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("TagTree — v1.3 task_006 SB-05（折叠 + 过滤）", () => {
+  it("AC-1 默认折叠：aria-expanded=false，过滤框与标签均不在 DOM", () => {
+    useTagStore.setState({
+      tags: [
+        { id: "1", name: "alpha", color: "#fff", source: "user", usageCount: 1 },
+        { id: "2", name: "beta", color: "#fff", source: "user", usageCount: 2 },
+      ],
+      isLoading: false,
+      error: null,
+    });
+    render(<TagTree />);
+    const toggle = screen.getByRole("button", { name: /Tags/i });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByPlaceholderText("过滤标签")).toBeNull();
+    expect(screen.queryByText("alpha")).toBeNull();
+  });
+
+  it("AC-2/3 点击展开 → 渲染过滤框 + 全部标签；再点折叠回去", () => {
+    useTagStore.setState({
+      tags: [
+        { id: "1", name: "alpha", color: "#fff", source: "user", usageCount: 1 },
+        { id: "2", name: "beta", color: "#fff", source: "user", usageCount: 2 },
+      ],
+      isLoading: false,
+      error: null,
+    });
+    render(<TagTree />);
+    const toggle = screen.getByRole("button", { name: /Tags/i });
+    act(() => fireEvent.click(toggle));
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByPlaceholderText("过滤标签")).toBeTruthy();
+    expect(screen.getByText("alpha")).toBeTruthy();
+    expect(screen.getByText("beta")).toBeTruthy();
+    act(() => fireEvent.click(toggle));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByPlaceholderText("过滤标签")).toBeNull();
+  });
+
+  it("AC-4 过滤输入：实时筛选（case-insensitive）", () => {
+    useTagStore.setState({
+      tags: [
+        { id: "1", name: "Physics", color: "#fff", source: "user", usageCount: 1 },
+        { id: "2", name: "Chemistry", color: "#fff", source: "user", usageCount: 1 },
+        { id: "3", name: "physics-101", color: "#fff", source: "user", usageCount: 1 },
+      ],
+      isLoading: false,
+      error: null,
+    });
+    useUIStore.setState({ ...INITIAL_UI, tagsExpanded: true });
+    render(<TagTree />);
+    const input = screen.getByPlaceholderText("过滤标签");
+    act(() => fireEvent.change(input, { target: { value: "phy" } }));
+    expect(screen.getByText("Physics")).toBeTruthy();
+    expect(screen.getByText("physics-101")).toBeTruthy();
+    expect(screen.queryByText("Chemistry")).toBeNull();
+  });
+
+  it("AC-5 空过滤显示全部；无匹配显示空状态文案", () => {
+    useTagStore.setState({
+      tags: [
+        { id: "1", name: "alpha", color: "#fff", source: "user", usageCount: 1 },
+        { id: "2", name: "beta", color: "#fff", source: "user", usageCount: 1 },
+      ],
+      isLoading: false,
+      error: null,
+    });
+    useUIStore.setState({ ...INITIAL_UI, tagsExpanded: true });
+    render(<TagTree />);
+    expect(screen.getByText("alpha")).toBeTruthy();
+    expect(screen.getByText("beta")).toBeTruthy();
+    const input = screen.getByPlaceholderText("过滤标签");
+    act(() => fireEvent.change(input, { target: { value: "zzz" } }));
+    expect(screen.getByText(/无匹配标签/)).toBeTruthy();
+  });
+
+  it("AC-7 a11y：aria-expanded + aria-controls=tag-tree-list", () => {
+    useTagStore.setState({
+      tags: [{ id: "1", name: "alpha", color: "#fff", source: "user", usageCount: 1 }],
+      isLoading: false,
+      error: null,
+    });
+    render(<TagTree />);
+    const toggle = screen.getByRole("button", { name: /Tags/i });
+    expect(toggle.getAttribute("aria-controls")).toBe("tag-tree-list");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    act(() => fireEvent.click(toggle));
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById("tag-tree-list")).toBeTruthy();
+  });
+});

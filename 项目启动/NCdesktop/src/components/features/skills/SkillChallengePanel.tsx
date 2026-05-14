@@ -220,7 +220,7 @@ function EvaluationResult({ evaluation, onRetry, onClose }: ResultProps) {
       {passed ? (
         <div className="scp-pass-badge">
           <CheckCircle2 size={16} />
-          <span>技能验证通过 🎉</span>
+          <span>技能验证通过</span>
         </div>
       ) : (
         <div className="scp-fail-badge">

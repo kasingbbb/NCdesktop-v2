@@ -1,0 +1,6 @@
+{
+  "comment": "task_012 known-fail-list: 持续性失败样本清单。每条记录一个 samples-private 内的相对路径。落入此清单的失败不会阻断 CI，但每条都必须有 RCA 文档（output.md / RCA-<n>）；任何未列入此清单的 fail 都会让 run-real-sample-matrix.sh 返回非零。AC-6 例外：*_known_production_failure.epub 即使列入此清单也会被脚本忽略并强制 ESCALATE。",
+  "version": 1,
+  "samples": [
+  ]
+}

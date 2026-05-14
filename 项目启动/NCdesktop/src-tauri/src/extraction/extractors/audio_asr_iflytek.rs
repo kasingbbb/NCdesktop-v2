@@ -31,6 +31,21 @@ const QUERY_PATH: &str = "/v2/getResult";
 const POLL_INTERVAL_SECS: u64 = 10;
 const POLL_MAX_RETRIES: u32 = 180; // 180 × 10s = 30 分钟
 
+/// task_014 Fix-A3：language 默认值。
+/// 用户讯飞应用密钥不支持 `autodialect`（错误 code=100020），改为 "cn"；
+/// 通过 `ExtractOptions.iflytek_language` 可由 setting `iflytekLanguage` 覆盖。
+const DEFAULT_IFLYTEK_LANGUAGE: &str = "cn";
+
+/// 选择 language 参数：option 非空 → option；否则 DEFAULT_IFLYTEK_LANGUAGE。
+fn resolve_language(opts: &ExtractOptions) -> String {
+    opts.iflytek_language
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(DEFAULT_IFLYTEK_LANGUAGE)
+        .to_string()
+}
+
 type HmacSha1 = Hmac<Sha1>;
 
 // ── 工具函数 ─────────────────────────────────────────────────────────────
@@ -162,16 +177,17 @@ impl Extractor for IflytekAsrExtractor {
     fn extract(
         &self,
         file_path: &Path,
-        _options: &ExtractOptions,
+        options: &ExtractOptions,
     ) -> Result<ExtractionResult, ExtractionError> {
-        tokio::runtime::Handle::current().block_on(transcribe(file_path))
+        let language = resolve_language(options);
+        tokio::runtime::Handle::current().block_on(transcribe(file_path, &language))
     }
 }
 
 // ── 核心异步逻辑 ──────────────────────────────────────────────────────────
 
-async fn transcribe(file_path: &Path) -> Result<ExtractionResult, ExtractionError> {
-    let order_id = submit_task(file_path).await?;
+async fn transcribe(file_path: &Path, language: &str) -> Result<ExtractionResult, ExtractionError> {
+    let order_id = submit_task(file_path, language).await?;
     log::info!("[讯飞 ASR] 任务提交成功，orderId={}", order_id);
 
     let text = poll_result(&order_id).await?;
@@ -205,17 +221,34 @@ async fn transcribe(file_path: &Path) -> Result<ExtractionResult, ExtractionErro
     })
 }
 
-async fn submit_task(file_path: &Path) -> Result<String, ExtractionError> {
-    let audio_bytes = tokio::fs::read(file_path).await.map_err(|e| {
-        ExtractionError::OcrError(format!("读取音频文件失败: {e}"))
+async fn submit_task(file_path: &Path, language: &str) -> Result<String, ExtractionError> {
+    // 流式上传：避免把整个音频文件一次性读入 RAM（大文件可能 OOM）。
+    // 通过 tokio::fs::File 元数据拿大小用于签名，再用 ReaderStream 边读边发。
+    let meta = tokio::fs::metadata(file_path).await.map_err(|e| {
+        ExtractionError::OcrError(format!("读取音频元数据失败: {e}"))
     })?;
+    let file_size_bytes = meta.len();
+    let file_size = file_size_bytes.to_string();
 
-    let file_size = audio_bytes.len().to_string();
     let file_name = file_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("audio.mp3")
         .to_string();
+
+    log::info!(
+        "[讯飞 ASR] 准备上传：file={} size={:.2} MB",
+        file_name,
+        file_size_bytes as f64 / 1024.0 / 1024.0
+    );
+    // 讯飞非实时转写单文件上限按账号档位不同（通常 ≥500MB）；超大文件给出警示
+    if file_size_bytes > 500 * 1024 * 1024 {
+        log::warn!(
+            "[讯飞 ASR] 文件 >500MB（{:.0} MB），上传/转写耗时可能超出 30 分钟轮询窗口",
+            file_size_bytes as f64 / 1024.0 / 1024.0
+        );
+    }
+
     let date_time = datetime_now();
     let random = signature_random();
 
@@ -227,23 +260,33 @@ async fn submit_task(file_path: &Path) -> Result<String, ExtractionError> {
     params.insert("durationCheckDisable", "true".to_string());
     params.insert("fileName", file_name.clone());
     params.insert("fileSize", file_size.clone());
-    params.insert("language", "autodialect".to_string());
+    params.insert("language", language.to_string());
     params.insert("signatureRandom", random.clone());
 
     let sig = generate_signature(&params, ACCESS_KEY_SECRET)?;
     let query = build_query(&params);
     let url = format!("{IFLYTEK_BASE_URL}{UPLOAD_PATH}?{query}");
 
+    // 上传超时：大文件传输时间正比于带宽，1GB / 5MB/s ≈ 3.5 分钟；放宽到 30 分钟以
+    // 覆盖慢网络场景。连接握手仍保持 30s 短超时及早暴露离线问题。
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(30 * 60))
         .build()
         .map_err(|e| ExtractionError::OcrError(format!("HTTP 客户端创建失败: {e}")))?;
+
+    let file = tokio::fs::File::open(file_path).await.map_err(|e| {
+        ExtractionError::OcrError(format!("打开音频文件失败: {e}"))
+    })?;
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let body = reqwest::Body::wrap_stream(stream);
 
     let resp = client
         .post(&url)
         .header("Content-Type", "application/octet-stream")
+        .header("Content-Length", file_size_bytes)
         .header("signature", &sig)
-        .body(audio_bytes)
+        .body(body)
         .send()
         .await
         .map_err(|e| ExtractionError::OcrError(format!("讯飞上传请求失败: {e}")))?;
@@ -544,5 +587,38 @@ mod tests {
     fn test_signature_random_length() {
         let r = signature_random();
         assert_eq!(r.len(), 16);
+    }
+
+    /// task_014 Fix-A3 AC-5：默认 language = "cn"（修复 code=100020 autodialect 不支持）
+    #[test]
+    fn resolve_language_defaults_to_cn() {
+        let opts = ExtractOptions::default();
+        assert_eq!(resolve_language(&opts), "cn");
+    }
+
+    /// task_014 Fix-A3：空字符串视为 None → 默认 "cn"
+    #[test]
+    fn resolve_language_empty_string_falls_back_to_cn() {
+        let opts = ExtractOptions {
+            iflytek_language: Some("   ".to_string()),
+            ..ExtractOptions::default()
+        };
+        assert_eq!(resolve_language(&opts), "cn");
+    }
+
+    /// task_014 Fix-A3：setting 覆盖时取覆盖值
+    #[test]
+    fn resolve_language_uses_option_when_present() {
+        let opts = ExtractOptions {
+            iflytek_language: Some("autodialect".to_string()),
+            ..ExtractOptions::default()
+        };
+        assert_eq!(resolve_language(&opts), "autodialect");
+
+        let opts2 = ExtractOptions {
+            iflytek_language: Some("en".to_string()),
+            ..ExtractOptions::default()
+        };
+        assert_eq!(resolve_language(&opts2), "en");
     }
 }

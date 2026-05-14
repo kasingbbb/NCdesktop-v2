@@ -1,0 +1,106 @@
+# task_012: 7 格式 × ≥5 真实样本端到端验收矩阵 (CI)
+# PENDING-PM: 替换 <ORG>/<SAMPLES_REPO_NAME> 为实际私有样本仓；注入 secrets SAMPLES_DEPLOY_KEY + MARKITDOWN_SAMPLES_KEY。
+#
+# 触发：手动 (workflow_dispatch) 或 push/PR 到 main 时（如 macOS runner 可用且未跳过）。
+# 行为：
+#   1. checkout 主仓 + 私有 samples-private 仓
+#   2. 验 MARKITDOWN_SAMPLES_KEY 已注入
+#   3. 安装 markitdown 运行时（用 NCdesktop 同款 embedded python 准备脚本）
+#   4. 跑 scripts/run-real-sample-matrix.sh
+#   5. 上传 real-samples-report.json 作为 artifact
+#
+# macOS runner 豁免：repository_dispatch / 手动启动时 runs-on=macos-latest；如 GH Actions 无 macos
+# quota 可在 workflow_dispatch input 切到 ubuntu-latest 跑（仅做 plumbing 验证；不计 PASS）。
+name: Real Samples Matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Runner OS (macos-latest preferred; ubuntu-latest = plumbing-only)"
+        required: false
+        default: "macos-latest"
+        type: choice
+        options:
+          - macos-latest
+          - ubuntu-latest
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    name: Real samples 7-format end-to-end
+    runs-on: ${{ inputs.runner || 'macos-latest' }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout main repo
+        uses: actions/checkout@v4
+
+      - name: Checkout samples-private
+        uses: actions/checkout@v4
+        with:
+          # PENDING-PM: 填实际 repo
+          repository: <ORG>/<SAMPLES_REPO_NAME>
+          ssh-key: ${{ secrets.SAMPLES_DEPLOY_KEY }}
+          path: samples-private
+          lfs: true
+
+      - name: Verify required secrets
+        env:
+          KEY: ${{ secrets.MARKITDOWN_SAMPLES_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEY:-}" ]; then
+            echo "::error::MARKITDOWN_SAMPLES_KEY secret not set"
+            exit 1
+          fi
+          echo "Key length: ${#KEY} (value not printed)"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install markitdown (pinned via NCdesktop manifest)
+        run: |
+          set -euo pipefail
+          # 复用 task_002 runtime-manifest 锁定版本（与 build-macos-dmg 流程一致）
+          if [ -f NCdesktop/scripts/requirements.lock ]; then
+            python -m pip install --upgrade pip
+            python -m pip install -r NCdesktop/scripts/requirements.lock
+          else
+            # Fallback：直接装 markitdown（CI 临时跑通；本地 DMG 仍走 prepare-embedded-python.sh）
+            python -m pip install --upgrade pip
+            python -m pip install 'markitdown[all]==0.1.5'
+          fi
+          python -m markitdown --version || true
+
+      - name: Run real-samples matrix
+        env:
+          MARKITDOWN_SAMPLES_KEY: ${{ secrets.MARKITDOWN_SAMPLES_KEY }}
+          SAMPLES_PRIVATE_DIR: ${{ github.workspace }}/samples-private
+          REPORT_OUT: ${{ github.workspace }}/real-samples-report.json
+          KNOWN_FAIL_LIST: ${{ github.workspace }}/NCdesktop/scripts/known-fail-list.json
+          PYTHON_BIN: python
+        run: |
+          set -euo pipefail
+          bash NCdesktop/scripts/run-real-sample-matrix.sh
+
+      - name: Upload report.json artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-samples-report
+          path: real-samples-report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Scrub plaintext (no leakage)
+        if: always()
+        run: |
+          set -euo pipefail
+          # samples-private/ checkout 仍是加密 .enc；解密临时目录由脚本 trap 清理；
+          # 此步保险再删一次。
+          rm -rf samples-private || true
+          echo "Plaintext scrubbed."

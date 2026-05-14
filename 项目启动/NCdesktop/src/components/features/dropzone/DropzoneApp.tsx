@@ -1,4 +1,4 @@
-import { type DragEvent, useEffect } from "react";
+import { type DragEvent, useEffect, useState } from "react";
 import { GripHorizontal, MoveDiagonal2, X } from "lucide-react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -21,9 +21,27 @@ export function DropzoneApp() {
   const { phase: currentState, setPhase: setState, addItem, isExpanded } =
     useDropzoneStore();
 
+  // v1.3 task_011 DZ-01：监听悬浮窗自身 focus/blur；失焦时半透明（主窗聚焦的等价信号）
+  const [isFocused, setIsFocused] = useState(true);
+
   useEffect(() => {
     logger.info("DropzoneApp", "Phase changed", { phase: currentState });
   }, [currentState]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => setIsFocused(focused))
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => {
+        logger.warn("DropzoneApp", "onFocusChanged setup failed", { err: String(err) });
+      });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   const simulateImport = (): void => {
     setState("processing");
@@ -209,23 +227,28 @@ export function DropzoneApp() {
 
   return (
     <div
-      className="w-screen h-screen flex flex-col select-none overflow-hidden relative p-2.5 box-border"
+      data-testid="dropzone-root"
+      data-focused={isFocused ? "true" : "false"}
+      className={`w-screen h-screen flex flex-col select-none overflow-hidden relative p-2.5 box-border transition-opacity ${isFocused ? "" : "dropzone-blurred"}`}
       onDragEnter={handleDragEnter}
       onDragLeave={handleDragLeave}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
       onContextMenu={(e) => e.preventDefault()}
-      style={{ background: "var(--surface-secondary)" }}
+      style={{ background: "transparent" }}
+      title="拖入文件以快速导入"
     >
       <div
-        className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-md border border-gray-200"
+        className="flex flex-col flex-1 min-h-0 overflow-hidden rounded-xl border"
         style={{
-          background: "var(--surface-primary)",
+          background: "#1a2233",
+          borderColor: "#2d3a50",
         }}
       >
         {/* 顶部拖动条 */}
         <div
-          className="relative shrink-0 h-8 flex items-center justify-center gap-1.5 cursor-grab active:cursor-grabbing z-40 rounded-t-md border-b border-gray-200 bg-gray-50"
+          className="relative shrink-0 h-8 flex items-center justify-center gap-1.5 cursor-grab active:cursor-grabbing z-40 rounded-t-xl border-b"
+          style={{ borderColor: "#2d3a50", background: "#1e2940" }}
           onMouseDown={(e) => {
             if (e.button !== 0) {
               return;
@@ -233,15 +256,24 @@ export function DropzoneApp() {
             void win.startDragging();
           }}
         >
-          <GripHorizontal size={14} className="text-gray-500" />
-          <span className="text-[10px] font-medium tracking-wide" style={{ color: "var(--text-secondary)" }}>
+          <GripHorizontal size={14} style={{ color: "rgba(255,255,255,0.4)" }} />
+          <span className="text-[10px] font-medium tracking-wide" style={{ color: "rgba(255,255,255,0.5)" }}>
             拖动移动
           </span>
           <button
             type="button"
             aria-label="关闭悬浮窗"
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded hover:bg-gray-200 text-gray-500 hover:text-gray-700 cursor-pointer"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 flex items-center justify-center rounded cursor-pointer transition-colors"
+            style={{ color: "rgba(255,255,255,0.4)" }}
             onMouseDown={(e) => e.stopPropagation()}
+            onMouseEnter={(e) => {
+              (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.1)";
+              (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.8)";
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLElement).style.background = "transparent";
+              (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.4)";
+            }}
             onClick={(e) => {
               e.stopPropagation();
               cmd

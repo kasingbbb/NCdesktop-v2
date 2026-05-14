@@ -12,6 +12,11 @@ pub mod knowledge_understanding;
 pub mod co_occurrence;
 pub mod concepts_extraction_log;
 pub mod knowledge_units;
+pub mod conversion_meta;
+// task_008（M-1 关闭）：scheduler 依赖 db::extraction 的 ExtractedContentRow /
+// PipelineTaskRow / upsert_extraction_result 等。该文件在仓库中早已存在但 mod.rs
+// 未声明（与 scheduler 自身被注释属同一类"注册缺口"）。
+pub mod extraction;
 
 use rusqlite::Connection;
 use std::path::Path;

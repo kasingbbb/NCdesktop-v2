@@ -1,0 +1,77 @@
+# verify-archive-presence.yml — task_015 AC-4
+#
+# 目的：合并到 main 之前必须确认存在 N-1 归档（rollback SOP 的前置条件）。
+# 实现：用 `gh release list` 拉取 GitHub Releases，验证：
+#   1. 至少存在 ≥ 2 个 release（N 和 N-1）；
+#   2. 上一个 release（N-1）必须含 DMG + .sha256 资产；
+# 不依赖仓库内 dist/archive/ 目录（DMG 不入 git，存于 Release artifacts / S3）。
+#
+# 失败 = exit 非 0，阻止合入。
+
+name: verify-archive-presence
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-n-minus-one:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify ≥2 releases exist with required assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # 拉取最近 5 个 release 元数据（含 draft / prerelease 过滤）
+          RELEASES_JSON=$(gh release list \
+            --limit 5 \
+            --exclude-drafts \
+            --exclude-pre-releases \
+            --json tagName,createdAt,isDraft,isPrerelease)
+
+          COUNT=$(echo "$RELEASES_JSON" | jq 'length')
+          echo "已发布的稳定 release 数: $COUNT"
+          if [ "$COUNT" -lt 2 ]; then
+            echo "::error::少于 2 个稳定 release，无法回滚到 N-1。请先发布至少 2 个版本。"
+            exit 1
+          fi
+
+          # 取第二个（按时间倒序排列的 N-1）
+          N1_TAG=$(echo "$RELEASES_JSON" | jq -r '.[1].tagName')
+          echo "N-1 tag: $N1_TAG"
+
+          # 验证 N-1 release 的资产清单
+          ASSETS_JSON=$(gh release view "$N1_TAG" --json assets)
+          ASSET_NAMES=$(echo "$ASSETS_JSON" | jq -r '.assets[].name')
+          echo "N-1 资产列表:"
+          echo "$ASSET_NAMES"
+
+          HAS_DMG=0
+          HAS_SHA=0
+          while IFS= read -r name; do
+            case "$name" in
+              *.dmg)     HAS_DMG=1 ;;
+              *.sha256)  HAS_SHA=1 ;;
+            esac
+          done <<< "$ASSET_NAMES"
+
+          if [ "$HAS_DMG" -ne 1 ]; then
+            echo "::error::N-1 release ($N1_TAG) 缺少 DMG 资产"
+            exit 1
+          fi
+          if [ "$HAS_SHA" -ne 1 ]; then
+            echo "::error::N-1 release ($N1_TAG) 缺少 .sha256 资产"
+            exit 1
+          fi
+
+          echo "PASS: N-1 release $N1_TAG 含 DMG + sha256，回滚预案就绪"
