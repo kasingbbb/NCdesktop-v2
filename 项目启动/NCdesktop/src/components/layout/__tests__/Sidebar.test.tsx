@@ -162,3 +162,69 @@ describe("Sidebar — 学习模式 ON", () => {
     expect(wrapper?.className).toContain("sidebar-learning-fade-in");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v1.3 task_003+004+005 PR-B 差异点（ADR-007）
+//   - SB-03：hub badge 全 0 不渲染（"不出现 0·0·0"）
+//   - SB-04：学习模式 ON 学习中心含「今日 + 课程表」（v1.3 PRD），不再渲染「今天没有课程」占位
+//   - SB-01：Sidebar 内无 Search 项（与历史 AC-4 重合，再补一条用 hash 检测）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("Sidebar — v1.3 PR-B 差异点", () => {
+  it("SB-03：assets/concepts/library 全 0 时 hub badge 整条不渲染（不出现 '0·0·0'）", () => {
+    // beforeEach 已经把三个 store 都置空
+    render(<Sidebar width={220} />);
+    const knowledgeBtn = screen.getByRole("button", { name: /知识中心/ });
+    expect(within(knowledgeBtn).queryByText("0·0·0")).toBeNull();
+    // 整个 button 内不应有 "·" 这个分隔符
+    expect(within(knowledgeBtn).queryByText(/·/)).toBeNull();
+  });
+
+  it("SB-03：至少一个 > 0 时 hub badge 渲染（包括 library=0 仍渲染 '3·2·0'）", () => {
+    useAssetStore.setState({
+      assets: [{ id: "a1" }, { id: "a2" }, { id: "a3" }] as unknown as ReturnType<
+        typeof useAssetStore.getState
+      >["assets"],
+      assetTagNamesById: {},
+      isLoading: false,
+    });
+    useKnowledgeStore.setState({
+      concepts: [{ id: "c1" }, { id: "c2" }] as unknown as ReturnType<
+        typeof useKnowledgeStore.getState
+      >["concepts"],
+    } as Partial<ReturnType<typeof useKnowledgeStore.getState>>);
+    render(<Sidebar width={220} />);
+    const knowledgeBtn = screen.getByRole("button", { name: /知识中心/ });
+    expect(within(knowledgeBtn).getByText("3·2·0")).toBeInTheDocument();
+  });
+
+  it("SB-04（v1.3 PRD）：学生态学习中心含「今日」与「课程表」（非「日历」）", () => {
+    useSettingsStore.setState({
+      settings: { ...INITIAL_SETTINGS, showLearningFeatures: true },
+      isLoading: false,
+    });
+    render(<Sidebar width={220} />);
+    expect(screen.getByRole("button", { name: /今日/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /课程表/ })).toBeInTheDocument();
+  });
+
+  it("SB-04：不再渲染 '今天没有课程' 占位文案（无论学生态是否开启）", () => {
+    // OFF
+    render(<Sidebar width={220} />);
+    expect(screen.queryByText(/今天没有课程/)).toBeNull();
+  });
+
+  it("SB-01：Sidebar 内不存在 Search 入口（顶层无 Search button、aria-label 也无）", () => {
+    render(<Sidebar width={220} />);
+    expect(screen.queryByRole("button", { name: /Search/i })).toBeNull();
+  });
+
+  it("SB-02：点击「知识中心」入口 → setSidebarSection('knowledge-hub') + hash 跳到 concepts", () => {
+    const setSidebarSection = vi.spyOn(useUIStore.getState(), "setSidebarSection");
+    render(<Sidebar width={220} />);
+    const knowledgeBtn = screen.getByRole("button", { name: /知识中心/ });
+    knowledgeBtn.click();
+    expect(setSidebarSection).toHaveBeenCalledWith("knowledge-hub");
+    expect(window.location.hash).toBe("#/knowledge-hub/concepts");
+  });
+});

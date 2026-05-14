@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FileText, Image, Music, File, FolderOpen } from "lucide-react";
+import { FileText, Image, Music, File, FolderOpen, AlertTriangle } from "lucide-react";
 import { useAssetStore } from "../../stores/assetStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTagStore } from "../../stores/tagStore";
@@ -9,6 +9,8 @@ import { useDragAssets } from "../../hooks/useDragAssets";
 import { ResizeHandle } from "../layout/ResizeHandle";
 import { WorkspaceFolderStrip } from "./WorkspaceFolderStrip";
 import { AssetContextMenu } from "./AssetContextMenu";
+import { RenameAssetModal } from "./RenameAssetModal";
+import { AssetStateBadge } from "../../lib/asset-state";
 import type { Asset, WorkspaceFolderEntry } from "../../types";
 import {
   getProjectWorkspaceRoot,
@@ -40,6 +42,29 @@ function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDateLabel(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return `${d.getMonth() + 1}月${d.getDate()}日`;
+  } catch {
+    return iso;
+  }
+}
+
+function groupAssetsByDate(assets: Asset[]): { label: string; items: Asset[] }[] {
+  const groups: Record<string, Asset[]> = {};
+  const order: string[] = [];
+  for (const a of assets) {
+    const key = formatDateLabel(a.importedAt);
+    if (!(key in groups)) {
+      groups[key] = [];
+      order.push(key);
+    }
+    groups[key].push(a);
+  }
+  return order.map((k) => ({ label: k, items: groups[k] }));
 }
 
 function formatImportTime(iso: string): string {
@@ -183,6 +208,49 @@ export function AssetListView() {
     );
   }, [orderedAssets, workspaceRoot, workspaceFolderRelativePath]);
 
+  const groupedDisplayAssets = useMemo(
+    () => groupAssetsByDate(displayAssets),
+    [displayAssets]
+  );
+
+  // 文件转换 v1.1：衍生 .md 通过 sourceAssetId 反查原件名，渲染「转换自 xxx」标记
+  const assetsById = useMemo(() => {
+    const m = new Map<string, typeof displayAssets[number]>();
+    for (const a of displayAssets) m.set(a.id, a);
+    return m;
+  }, [displayAssets]);
+
+  const addNotification = useUIStore((s) => s.addNotification);
+
+  const handleRetried = useCallback(
+    (assetId: string) => {
+      // 触发列表刷新，让新的 state（converting → done/failed）落到 UI 上
+      const pid = activeProject?.id;
+      if (pid) {
+        void useAssetStore.getState().fetchAssets(pid);
+      }
+      addNotification({
+        type: "info",
+        title: "已加入重试队列",
+        message: `资产 ${assetId.slice(0, 8)}… 将重新转化`,
+        duration: 2500,
+      });
+    },
+    [activeProject?.id, addNotification]
+  );
+
+  const handleRetryError = useCallback(
+    (msg: string) => {
+      addNotification({
+        type: "error",
+        title: "重试失败",
+        message: msg,
+        duration: 4000,
+      });
+    },
+    [addNotification]
+  );
+
   const folderFilterLabel = workspaceFolderRelativePath
     ? workspaceFolders.find((f) => f.relativePath === workspaceFolderRelativePath)
         ?.displayLabel ?? workspaceFolderRelativePath
@@ -202,6 +270,30 @@ export function AssetListView() {
     assetId: string;
     pane: "left" | "right";
   } | null>(null);
+
+  // task_011 AC-6：rename Modal 状态（替代 window.prompt）。
+  const [renameTarget, setRenameTarget] = useState<{
+    assetId: string;
+    initialName: string;
+  } | null>(null);
+  const [renameBusy, setRenameBusy] = useState(false);
+  // task_011 AC-7：删除确认对话框状态（中文文案，替代 window.confirm）。
+  const [deleteTarget, setDeleteTarget] = useState<{ ids: string[] } | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const openRenameModal = useCallback(
+    (assetId: string) => {
+      const current = useAssetStore.getState().assets.find((a) => a.id === assetId);
+      if (!current) return;
+      setRenameTarget({ assetId, initialName: current.name ?? "" });
+    },
+    []
+  );
+
+  const openDeleteModal = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    setDeleteTarget({ ids });
+  }, []);
 
   const { makeDragProps } = useDragAssets(selectedAssetIds, assets);
 
@@ -233,17 +325,96 @@ export function AssetListView() {
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      // 输入框 / 文本域 / 任何 Modal 内：不拦截
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (renameTarget || deleteTarget) return;
+
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
-        const tag = (e.target as HTMLElement | null)?.tagName;
-        if (tag === "INPUT" || tag === "TEXTAREA") return;
         e.preventDefault();
         const ids = new Set(displayAssets.map((a) => a.id));
         setSelectedAssetIds(ids);
+        return;
+      }
+      // task_011 AC-7：Enter / F2 → 重命名 Modal（仅单选生效）
+      if ((e.key === "Enter" || e.key === "F2") && !e.metaKey && !e.ctrlKey) {
+        const ids = Array.from(selectedAssetIds);
+        if (ids.length === 1) {
+          e.preventDefault();
+          openRenameModal(ids[0]);
+        }
+        return;
+      }
+      // task_011 AC-7：Backspace / Delete → 删除确认（中文）
+      if (e.key === "Backspace" || e.key === "Delete") {
+        const ids = Array.from(selectedAssetIds);
+        if (ids.length > 0) {
+          e.preventDefault();
+          openDeleteModal(ids);
+        }
+        return;
       }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [displayAssets, leftPaneFocused, setSelectedAssetIds]);
+  }, [
+    displayAssets,
+    leftPaneFocused,
+    setSelectedAssetIds,
+    selectedAssetIds,
+    renameTarget,
+    deleteTarget,
+    openRenameModal,
+    openDeleteModal,
+  ]);
+
+  // task_011 AC-6：Modal 提交 → renameAsset；失败用 toast，不再 window.alert
+  const handleRenameSubmit = useCallback(
+    async (newName: string) => {
+      if (!renameTarget) return;
+      setRenameBusy(true);
+      try {
+        await useAssetStore.getState().renameAsset(renameTarget.assetId, newName);
+        setRenameTarget(null);
+      } catch (err) {
+        console.error("[AssetListView] renameAsset failed:", err);
+        addNotification({
+          type: "error",
+          title: "重命名失败",
+          message: String(err),
+          duration: 4000,
+          dedupeKey: "rename_asset:err",
+        });
+      } finally {
+        setRenameBusy(false);
+      }
+    },
+    [renameTarget, addNotification]
+  );
+
+  // task_011 AC-7：删除确认 Modal 提交
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    const ids = deleteTarget.ids;
+    try {
+      for (const id of ids) {
+        await useAssetStore.getState().deleteAsset(id);
+      }
+      setDeleteTarget(null);
+    } catch (err) {
+      console.error("[AssetListView] deleteAsset failed:", err);
+      addNotification({
+        type: "error",
+        title: "删除失败",
+        message: String(err),
+        duration: 4000,
+        dedupeKey: "delete_asset:err",
+      });
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [deleteTarget, addNotification]);
 
   if (isLoading) {
     return (
@@ -395,7 +566,7 @@ export function AssetListView() {
                       >
                         <span className="shrink-0 mt-0.5">{assetIcon(a, 18)}</span>
                         <span className="min-w-0 flex-1">
-                          <span className="text-[var(--text-sm)] font-medium line-clamp-2 block" style={{ color: "var(--text-primary)" }}>
+                          <span className="text-[var(--text-sm)] font-medium truncate block" style={{ color: "var(--text-primary)" }} title={originalDisplayName(a)}>
                             {originalDisplayName(a)}
                           </span>
                           <span className="text-[10px] font-mono tabular-nums mt-0.5 block" style={{ color: "var(--text-secondary)" }}>
@@ -435,7 +606,7 @@ export function AssetListView() {
                       <div className="w-14 h-14 rounded-[var(--radius-md)] flex items-center justify-center shrink-0 bg-[var(--surface-tertiary)]">
                         {assetIcon(a, 22)}
                       </div>
-                      <p className="w-full text-[11px] font-medium line-clamp-2 text-center leading-snug" style={{ color: "var(--text-primary)" }}>
+                      <p className="w-full text-[11px] font-medium truncate text-center leading-snug" style={{ color: "var(--text-primary)" }} title={originalDisplayName(a)}>
                         {originalDisplayName(a)}
                       </p>
                     </button>
@@ -450,76 +621,189 @@ export function AssetListView() {
 
         {/* 右：工作区（重命名 + 标签 + 归类目录） */}
         <div className="flex-1 min-w-0 flex flex-col min-h-0">
-          <div className="px-3 py-2 border-b shrink-0 border-app bg-[var(--surface-tertiary)]">
-            <p className="text-[var(--text-sm)] font-semibold" style={{ color: "var(--text-primary)" }}>
-              工作区
-            </p>
-            <p className="text-[10px] mt-0.5" style={{ color: "var(--text-tertiary)" }}>
-              应用目录内副本的展示名、AI 标签与整理子目录（点击与左侧同一素材联动）
-            </p>
+          <div className="px-3 py-2 border-b shrink-0 border-app bg-[var(--surface-tertiary)] flex items-start justify-between">
+            <div>
+              <p className="text-[var(--text-sm)] font-semibold" style={{ color: "var(--text-primary)" }}>
+                工作区
+              </p>
+              <p className="text-[10px] mt-0.5" style={{ color: "var(--text-tertiary)" }}>
+                AI 整理后的 .md 文件 · 可拖拽到 Claude / ChatGPT
+              </p>
+            </div>
+            {selectedAssetId && (
+              <span
+                className="text-[10px] inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[var(--radius-full)]"
+                style={{
+                  color: "var(--color-accent-dark)",
+                  background: "var(--color-accent-soft)",
+                }}
+              >
+                已定位对应文件 ↑
+              </span>
+            )}
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto bg-[var(--surface-primary)]">
             {viewMode === "list" ? (
-              <ul className="flex flex-col gap-2 p-2">
-                {displayAssets.map((a) => {
-                  const active = selectedAssetId === a.id;
-                  const tagNames = assetTagNamesById[a.id] ?? [];
-                  const cat = inferOrganizedCategory(a.filePath);
-                  const renamed = a.name.trim() !== originalDisplayName(a).trim();
-                  return (
-                    <li key={a.id}>
-                      <button
-                        type="button"
-                        onClick={(e) => handleCardClick(e, a.id)}
-                        onContextMenu={(e) => handleCardContextMenu(e, a.id, "right")}
-                        {...makeDragProps(a.id)}
-                        className="w-full text-left px-3 py-2.5 flex items-start gap-2 rounded-[var(--radius-md)] border border-app transition-colors hover:border-[var(--border-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--border-active)] bg-[var(--surface-primary)]"
-                        style={{
-                          background: selectedAssetIds.has(a.id)
-                            ? "var(--brand-navy-10)"
-                            : active
-                            ? "var(--sidebar-active-bg)"
-                            : undefined,
-                          outline: selectedAssetIds.has(a.id)
-                            ? "2px solid var(--brand-navy)"
-                            : undefined,
-                        }}
+              <div className="flex flex-col p-2 gap-3">
+                {groupedDisplayAssets.map((group) => (
+                  <div key={group.label}>
+                    {/* 日期分组头 */}
+                    <div className="flex items-center justify-between px-1 mb-1.5">
+                      <span
+                        className="text-[11px] font-semibold"
+                        style={{ color: "var(--text-secondary)" }}
                       >
-                        <span className="shrink-0 mt-0.5">{assetIcon(a, 18)}</span>
-                        <span className="min-w-0 flex-1">
-                          <span className="text-[var(--text-sm)] font-medium line-clamp-2 block" style={{ color: "var(--text-primary)" }}>
-                            {a.name}
-                            {renamed ? (
-                              <span className="ml-1.5 text-[10px] font-normal px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--surface-tertiary)]" style={{ color: "var(--text-secondary)" }}>
-                                已重命名
+                        {group.label}{activeProject ? ` ${activeProject.name}` : ""}
+                      </span>
+                      <span
+                        className="text-[10px] tabular-nums"
+                        style={{ color: "var(--text-tertiary)" }}
+                      >
+                        {group.items.length} 个 ↑
+                      </span>
+                    </div>
+                    <ul className="flex flex-col gap-2">
+                      {group.items.map((a) => {
+                        const active = selectedAssetId === a.id;
+                        const tagNames = assetTagNamesById[a.id] ?? [];
+                        const cat = inferOrganizedCategory(a.filePath);
+                        const renamed = a.name.trim() !== originalDisplayName(a).trim();
+                        const state = a.state;
+                        // task_011 AC-2 / AC-4
+                        const sourceMissing = a.sourceMissing === true;
+                        const notDone = state !== undefined && state !== "done";
+                        const stateBadgeTitlePrefix = notDone ? "无法拖出 · " : "";
+                        return (
+                          <li
+                            key={a.id}
+                            data-asset-id={a.id}
+                            data-state={state ?? "unknown"}
+                            data-source-missing={sourceMissing ? "true" : "false"}
+                          >
+                            <button
+                              type="button"
+                              onClick={(e) => handleCardClick(e, a.id)}
+                              onContextMenu={(e) => handleCardContextMenu(e, a.id, "right")}
+                              {...makeDragProps(a.id)}
+                              data-cursor={notDone ? "not-allowed" : "grab"}
+                              className="w-full text-left px-3 py-2.5 flex items-start gap-2 rounded-[var(--radius-md)] border border-app transition-colors hover:border-[var(--border-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--border-active)] bg-[var(--surface-primary)]"
+                              style={{
+                                background: selectedAssetIds.has(a.id)
+                                  ? "var(--brand-navy-10)"
+                                  : active
+                                  ? "var(--sidebar-active-bg)"
+                                  : undefined,
+                                outline: selectedAssetIds.has(a.id)
+                                  ? "2px solid var(--brand-navy)"
+                                  : undefined,
+                                cursor: notDone ? "not-allowed" : "grab",
+                              }}
+                              title={notDone ? "无法拖出：当前状态非 done" : undefined}
+                            >
+                              <span className="shrink-0 mt-0.5">{assetIcon(a, 18)}</span>
+                              <span className="min-w-0 flex-1">
+                                <span className="flex items-center justify-between gap-2 min-w-0">
+                                  <span className="text-[var(--text-md)] font-medium truncate flex-1 min-w-0" style={{ color: "var(--text-primary)" }} title={a.name}>
+                                    {a.name}
+                                  </span>
+                                  {/* task_011 AC-2：源文件缺失角标 */}
+                                  {sourceMissing ? (
+                                    <span
+                                      data-testid="source-missing-badge"
+                                      className="shrink-0 inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-[var(--radius-md)]"
+                                      style={{
+                                        color: "#b45309",
+                                        background: "rgba(245,158,11,0.14)",
+                                        border: "1px solid rgba(245,158,11,0.35)",
+                                      }}
+                                      title="源文件不在原位置，rendition 仍可拖出"
+                                    >
+                                      <AlertTriangle size={10} aria-hidden />
+                                      <span>原件丢失</span>
+                                    </span>
+                                  ) : null}
+                                  {renamed ? (
+                                    <span className="shrink-0 text-[10px] font-normal px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--surface-tertiary)]" style={{ color: "var(--text-secondary)" }}>
+                                      已重命名
+                                    </span>
+                                  ) : null}
+                                  {state ? (
+                                    <span
+                                      className="shrink-0"
+                                      title={stateBadgeTitlePrefix || undefined}
+                                    >
+                                      <AssetStateBadge
+                                        state={state}
+                                        assetId={a.id}
+                                        reason={a.stateReason ?? null}
+                                        extractorType={
+                                          (a as typeof a & {
+                                            extractorType?: string | null;
+                                          }).extractorType ?? null
+                                        }
+                                        failureCode={
+                                          (a as typeof a & {
+                                            extractionFailureCode?: string | null;
+                                          }).extractionFailureCode ?? null
+                                        }
+                                        onRetry={() => handleRetried(a.id)}
+                                        onError={handleRetryError}
+                                      />
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <span className="flex flex-wrap items-center gap-1.5 mt-1">
+                                  {cat ? (
+                                    <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-[var(--radius-full)] bg-[var(--color-accent-soft)] border border-app" style={{ color: "var(--text-secondary)" }}>
+                                      <FolderOpen size={10} />
+                                      {cat}
+                                    </span>
+                                  ) : null}
+                                  {tagNames.slice(0, 3).map((tn) => (
+                                    <span
+                                      key={tn}
+                                      className="tag-pill !text-[10px] !px-1.5 !py-0.5"
+                                    >
+                                      {tn}
+                                    </span>
+                                  ))}
+                                  {tagNames.length > 3 && (
+                                    <span
+                                      className="text-[10px] px-1 py-0.5 rounded-[var(--radius-full)]"
+                                      style={{ color: "var(--text-tertiary)" }}
+                                    >
+                                      +{tagNames.length - 3}
+                                    </span>
+                                  )}
+                                </span>
+                                <span className="text-[10px] font-mono tabular-nums mt-1 block truncate" style={{ color: "var(--text-secondary)" }} title={a.filePath}>
+                                  {kindLabel(assetKind(a))} · {formatBytes(a.fileSize)} · {formatImportTime(a.importedAt)}
+                                </span>
+                                {(() => {
+                                  const sourceId = a.sourceAssetId;
+                                  const source = sourceId ? assetsById.get(sourceId) : null;
+                                  const label = source
+                                    ? `转换自 ${originalDisplayName(source)}`
+                                    : "来源：1 个原件";
+                                  return (
+                                    <span
+                                      className="text-[10px] mt-0.5 block truncate"
+                                      style={{ color: "var(--text-tertiary)" }}
+                                      title={label}
+                                    >
+                                      {label}
+                                    </span>
+                                  );
+                                })()}
                               </span>
-                            ) : null}
-                          </span>
-                          <span className="flex flex-wrap items-center gap-1.5 mt-1">
-                            {cat ? (
-                              <span className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-[var(--radius-full)] bg-[var(--color-accent-soft)] border border-app" style={{ color: "var(--text-secondary)" }}>
-                                <FolderOpen size={10} />
-                                {cat}
-                              </span>
-                            ) : null}
-                            {tagNames.map((tn) => (
-                              <span
-                                key={tn}
-                                className="tag-pill !text-[10px] !px-1.5 !py-0.5"
-                              >
-                                {tn}
-                              </span>
-                            ))}
-                          </span>
-                          <span className="text-[10px] font-mono tabular-nums mt-1 block truncate" style={{ color: "var(--text-secondary)" }} title={a.filePath}>
-                            {kindLabel(assetKind(a))} · {formatBytes(a.fileSize)}
-                          </span>
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ))}
+              </div>
             ) : (
               <div className="p-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {displayAssets.map((a) => {
@@ -549,7 +833,7 @@ export function AssetListView() {
                       <div className="w-14 h-14 rounded-[var(--radius-md)] flex items-center justify-center shrink-0 bg-[var(--surface-tertiary)]">
                         {assetIcon(a, 22)}
                       </div>
-                      <p className="w-full text-[11px] font-medium line-clamp-2 text-center leading-snug" style={{ color: "var(--text-primary)" }}>
+                      <p className="w-full text-[11px] font-medium truncate text-center leading-snug" style={{ color: "var(--text-primary)" }} title={a.name}>
                         {a.name}
                       </p>
                       {renamed ? (
@@ -578,24 +862,113 @@ export function AssetListView() {
       </div>
       )}
 
-      {contextMenu && activeProject ? (
-        <AssetContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          assetId={contextMenu.assetId}
-          pane={contextMenu.pane}
-          selectedAssetIds={selectedAssetIds}
-          workspaceFolders={workspaceFolders}
-          projectId={activeProject.id}
-          currentFilePath={
-            assets.find((a) => a.id === contextMenu.assetId)?.filePath ?? ""
-          }
-          onClose={() => setContextMenu(null)}
-          onMoved={() => {
-            void loadWorkspaceFolders();
-            void useAssetStore.getState().fetchAssets(activeProject.id);
+      {contextMenu && activeProject ? (() => {
+        const target = assets.find((a) => a.id === contextMenu.assetId);
+        const srcRaw = (target as (Asset & { sourceData?: string | null }) | undefined)?.sourceData;
+        return (
+          <AssetContextMenu
+            x={contextMenu.x}
+            y={contextMenu.y}
+            assetId={contextMenu.assetId}
+            pane={contextMenu.pane}
+            selectedAssetIds={selectedAssetIds}
+            workspaceFolders={workspaceFolders}
+            projectId={activeProject.id}
+            currentFilePath={target?.filePath ?? ""}
+            sourcePath={srcRaw ?? null}
+            sourceMissing={target?.sourceMissing === true}
+            onRequestRename={(id) => openRenameModal(id)}
+            onClose={() => setContextMenu(null)}
+            onMoved={() => {
+              void loadWorkspaceFolders();
+              void useAssetStore.getState().fetchAssets(activeProject.id);
+            }}
+          />
+        );
+      })() : null}
+
+      {/* task_011 AC-6：rename Modal */}
+      {renameTarget ? (
+        <RenameAssetModal
+          initialName={renameTarget.initialName}
+          busy={renameBusy}
+          onCancel={() => {
+            if (!renameBusy) setRenameTarget(null);
           }}
+          onSubmit={(name) => void handleRenameSubmit(name)}
         />
+      ) : null}
+
+      {/* task_011 AC-7：删除确认 Modal（中文） */}
+      {deleteTarget ? (
+        <div
+          data-testid="asset-delete-modal"
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.35)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9998,
+          }}
+          onClick={() => {
+            if (!deleteBusy) setDeleteTarget(null);
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              minWidth: 360,
+              maxWidth: 480,
+              background: "var(--surface-primary)",
+              border: "1px solid var(--border-primary)",
+              borderRadius: 8,
+              boxShadow: "0 8px 32px rgba(0,0,0,0.2)",
+              padding: 20,
+              color: "var(--text-primary)",
+            }}
+          >
+            <div style={{ fontSize: 14, marginBottom: 16, lineHeight: 1.5 }}>
+              {deleteTarget.ids.length === 1
+                ? "确认删除此文件？此操作不可撤销。"
+                : `确认删除选中的 ${deleteTarget.ids.length} 个文件？此操作不可撤销。`}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button
+                type="button"
+                data-testid="asset-delete-cancel"
+                disabled={deleteBusy}
+                onClick={() => setDeleteTarget(null)}
+                className="text-[13px] px-3 py-1 rounded-[var(--radius-sm)]"
+                style={{
+                  border: "1px solid var(--border-primary)",
+                  background: "var(--surface-primary)",
+                  color: "var(--text-primary)",
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                data-testid="asset-delete-confirm"
+                disabled={deleteBusy}
+                onClick={() => void handleDeleteConfirm()}
+                className="text-[13px] px-3 py-1 rounded-[var(--radius-sm)]"
+                style={{
+                  background: "#ef4444",
+                  color: "#fff",
+                  border: "none",
+                  opacity: deleteBusy ? 0.6 : 1,
+                }}
+              >
+                {deleteBusy ? "删除中…" : "删除"}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

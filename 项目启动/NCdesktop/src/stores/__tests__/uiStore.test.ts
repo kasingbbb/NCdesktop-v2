@@ -171,7 +171,7 @@ describe("persist 默认值 (AC-4)", () => {
 });
 
 describe("persist round-trip smoke (AC-4 完整矩阵在 task_009)", () => {
-  it("partialize 出口字段严格只含 {activeSidebarSection, todayLastTab}", () => {
+  it("partialize 出口字段严格只含 {activeSidebarSection, todayLastTab, tagsExpanded}", () => {
     useUIStore.getState().setSidebarSection("knowledge-hub");
     useUIStore.getState().setTodayLastTab("course-prep");
     useUIStore.getState().setLearningJustEnabled(true);
@@ -186,6 +186,7 @@ describe("persist round-trip smoke (AC-4 完整矩阵在 task_009)", () => {
     expect(parsed.state).toEqual({
       activeSidebarSection: "knowledge-hub",
       todayLastTab: "course-prep",
+      tagsExpanded: false,
     });
     // _learningJustEnabled 必须不在白名单内
     expect(parsed.state).not.toHaveProperty("_learningJustEnabled");
@@ -228,6 +229,55 @@ describe("persist round-trip smoke (AC-4 完整矩阵在 task_009)", () => {
 
     expect(useUIStore.getState().activeSidebarSection).toBe("recent");
     expect(useUIStore.getState().todayLastTab).toBe(null);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v1.3 task_002：tagsExpanded 字段（SB-07 / ADR-002）
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("tagsExpanded (v1.3 task_002 SB-07)", () => {
+  it("AC-1 默认值为 false", () => {
+    expect(useUIStore.getState().tagsExpanded).toBe(false);
+  });
+
+  it("AC-2 setTagsExpanded(true/false) toggle 正确", () => {
+    useUIStore.getState().setTagsExpanded(true);
+    expect(useUIStore.getState().tagsExpanded).toBe(true);
+    useUIStore.getState().setTagsExpanded(false);
+    expect(useUIStore.getState().tagsExpanded).toBe(false);
+  });
+
+  it("AC-3 partialize 出口包含 tagsExpanded", () => {
+    useUIStore.getState().setTagsExpanded(true);
+    const parsed = JSON.parse(localStorage.getItem("ui-store")!);
+    expect(parsed.state).toHaveProperty("tagsExpanded", true);
+  });
+
+  it("AC-4 migrate 旧 LS（无 tagsExpanded 字段）→ rehydrate 后默认 false", async () => {
+    localStorage.setItem(
+      "ui-store",
+      JSON.stringify({
+        state: { activeSidebarSection: "recent" },
+        version: 0,
+      }),
+    );
+    await useUIStore.persist.rehydrate();
+    expect(useUIStore.getState().tagsExpanded).toBe(false);
+  });
+
+  it("AC-4b migrate 'search' 老用户 → activeSidebarSection=recent 且 tagsExpanded=false", async () => {
+    localStorage.setItem(
+      "ui-store",
+      JSON.stringify({
+        state: { activeSidebarSection: "search" },
+        version: 0,
+      }),
+    );
+    await useUIStore.persist.rehydrate();
+    const s = useUIStore.getState();
+    expect(s.activeSidebarSection).toBe("recent");
+    expect(s.tagsExpanded).toBe(false);
   });
 });
 

@@ -15,3 +15,6 @@ pub mod workspace_folders;
 pub mod knowledge_understanding;
 pub mod knowledge;
 pub mod conversion;
+pub mod extraction;
+pub mod outbound;
+pub mod source_view;

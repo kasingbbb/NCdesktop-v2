@@ -86,6 +86,11 @@ export interface Notification {
   message: string;
   duration: number;
   createdAt: string;
+  /**
+   * task_011 AC-5：可选去重键。同一 dedupeKey 在 `addNotification` 3 秒
+   * 滑动窗口内合并/替换为最新一条（用于快速重复拖拽 / 重试场景，避免 toast 堆积）。
+   */
+  dedupeKey?: string;
 }
 
 /** Dropzone 悬浮窗状态 */

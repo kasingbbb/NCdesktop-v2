@@ -18,6 +18,8 @@ import {
   RefreshCw,
   ScanLine,
   BrainCircuit,
+  Check,
+  Circle,
 } from "lucide-react";
 import { useKnowledgeStore } from "../../../stores/knowledgeStore";
 import { useKnowledgeUnderstandingStore } from "../../../stores/knowledgeUnderstandingStore";
@@ -56,6 +58,8 @@ export function KnowledgeAssociationView() {
   const setUnderstandingConceptId = useKnowledgeUnderstandingStore((s) => s.setConceptId);
 
   const [scanStarted, setScanStarted] = useState(false);
+  // v1.3 task_009 IN-03：toggle 占位，默认开启；实际过滤逻辑推 v1.4
+  const [showLinkedOnly, setShowLinkedOnly] = useState(true);
   const unlistenRef = useRef<UnlistenFn | null>(null);
 
   // ── 初始化：加载概念列表 ─────────────────────────────────────────────────
@@ -183,6 +187,25 @@ export function KnowledgeAssociationView() {
 
         {/* 右侧按钮组 */}
         <div className="flex items-center gap-[var(--space-2)] ml-auto flex-shrink-0">
+          {/* v1.3 task_009 IN-03：toggle 占位（实际过滤逻辑推 v1.4） */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={showLinkedOnly}
+            data-testid="knowledge-assoc-linked-toggle"
+            onClick={() => setShowLinkedOnly((v) => !v)}
+            className="flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded-[var(--radius-md)] text-[var(--text-xs)] transition-colors"
+            style={{
+              background: showLinkedOnly ? "var(--surface-tertiary)" : "transparent",
+              border: "1px solid var(--border-primary)",
+              color: showLinkedOnly ? "var(--text-primary)" : "var(--text-tertiary)",
+            }}
+            title="仅显示与当前素材相关（v1.4 接入真实关联数据）"
+          >
+            {showLinkedOnly ? <Check size={12} aria-hidden /> : <Circle size={12} aria-hidden />}
+            仅显示关联
+          </button>
+
           {/* 重新扫描 */}
           <button
             type="button"
@@ -343,8 +366,8 @@ function ExtractionProgressBar({ progress }: { progress: ExtractionProgress }) {
         style={{ background: "var(--surface-tertiary)" }}
       >
         <div
-          className="h-full rounded-full transition-all duration-300"
-          style={{ width: `${pct}%`, background: "var(--brand-navy)" }}
+          className="h-full rounded-full"
+          style={{ width: `${pct}%`, background: "var(--brand-navy)", transition: "all var(--duration-normal)" }}
         />
       </div>
     </div>

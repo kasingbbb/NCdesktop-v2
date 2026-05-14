@@ -13,7 +13,8 @@ interface ProjectCardProps {
 export function ProjectCard({ project, onClick, onDelete }: ProjectCardProps) {
   return (
     <div
-      className="relative glass-card-elevated rounded-[var(--radius-xl)] p-[var(--space-3)] cursor-pointer transition-colors duration-200"
+      className="relative glass-card-elevated rounded-[var(--radius-xl)] p-[var(--space-3)] cursor-pointer"
+      style={{ transition: "background-color var(--duration-fast), border-color var(--duration-fast), color var(--duration-fast)" }}
       onClick={() => {
         logger.info("ProjectCard", "Project clicked", { id: project.id, name: project.name });
         onClick?.();

@@ -1,7 +1,29 @@
+/**
+ * 工作区拖出 .md 投影 hook（task_008 AC-3）。
+ *
+ * 流程：
+ * 1. mousedown：记录起点，同时**立即** kick off `prepare_outbound_payload`（异步）。
+ *    在用户交互上下文（mousedown）阶段就发起 IPC，能让 await 解析时大概率已经
+ *    返回，避免到达 mousemove 阈值时 startDrag 失去 user gesture。
+ * 2. mousemove 阈值跨过：await 之前 kick off 的 Promise → 成功 → startDrag(item: e.path)。
+ * 3. 失败：解析 OutboundError 联合类型 → 4 种中文 toast。
+ *
+ * 注意：
+ * - mousedown 时不知道最终拖几条（用户可能 cmd+click 加选），这里按当前选择集合 / 单条
+ *   两种情况预先决定 ids（与 mousemove 阶段一致）。
+ * - 若 mousedown 后用户没拖（点击/松手）→ Promise 自然废弃，不影响 UI。
+ * - dropzone 内部组件签名未变，本 hook 不动 DropzoneApp。
+ */
 import { useCallback, useEffect, useRef } from "react";
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { invoke } from "@tauri-apps/api/core";
 import type { Asset } from "../types";
+import {
+  parseOutboundError,
+  type OutboundEntry,
+  type OutboundError,
+} from "../lib/tauri-commands";
+import { useUIStore } from "../stores/uiStore";
 
 export const DRAG_ASSET_TYPE = "application/notecapt-assets";
 
@@ -11,6 +33,41 @@ export interface DragAssetPayload {
 
 const DRAG_MOVE_THRESHOLD = 5;
 
+function outboundErrorToToast(err: OutboundError | null, rawMessage: string): {
+  title: string;
+  message: string;
+} {
+  if (!err) {
+    return { title: "拖拽准备失败", message: rawMessage };
+  }
+  switch (err.kind) {
+    case "stateNotDone":
+      return {
+        title: "无法拖出",
+        message: `非 done 态资产无法拖出（当前：${err.state}）`,
+      };
+    case "mixedStates":
+      return {
+        title: "无法拖出",
+        message: `多选包含非 done 态资产（${err.offending.length} 条），无法整体拖出`,
+      };
+    case "renditionMissing":
+      return {
+        title: "无法拖出",
+        message: "未找到转化后的 MD 文件，请先重试转化",
+      };
+    case "ioFailed":
+      return {
+        title: "拖拽准备失败",
+        message: err.detail || err.message || "IO 错误",
+      };
+    case "emptyInput":
+      return { title: "无法拖出", message: "未选中任何素材" };
+    case "assetNotFound":
+      return { title: "无法拖出", message: `资产不存在：${err.assetId}` };
+  }
+}
+
 export function useDragAssets(
   selectedAssetIds: Set<string>,
   assets: Asset[]
@@ -19,26 +76,46 @@ export function useDragAssets(
     assetId: string;
     startX: number;
     startY: number;
+    ids: string[];
+    /** mousedown 时 kick off 的 outbound payload Promise（含错误） */
+    payloadPromise: Promise<OutboundEntry[]>;
   } | null>(null);
   const isDraggingRef = useRef(false);
   const dragIconRef = useRef<string>("");
+  const addNotification = useUIStore((s) => s.addNotification);
+  // 通过 ref 读最新的 assets/selection，避免重建 makeDragProps 引起的 listener 漂移
+  const assetsRef = useRef(assets);
+  const selectedRef = useRef(selectedAssetIds);
+  useEffect(() => {
+    assetsRef.current = assets;
+  }, [assets]);
+  useEffect(() => {
+    selectedRef.current = selectedAssetIds;
+  }, [selectedAssetIds]);
 
   useEffect(() => {
     invoke<string>("get_drag_icon_path")
       .then((p) => {
-        console.log("[drag] icon path:", p);
         dragIconRef.current = p;
       })
       .catch((e) => console.error("[drag] get_drag_icon_path failed:", e));
   }, []);
 
-  const resolveFilePaths = useCallback(
-    (ids: string[]): string[] => {
-      return ids
-        .map((id) => assets.find((a) => a.id === id)?.filePath)
-        .filter((p): p is string => !!p);
+  const toast = useCallback(
+    (raw: unknown) => {
+      const parsed = parseOutboundError(raw);
+      const { title, message } = outboundErrorToToast(parsed, String(raw));
+      // task_011 AC-5：同一 OutboundError 类型在 3s 窗口内合并/替换，避免堆积
+      const dedupeKey = parsed ? `outbound:${parsed.kind}` : "outbound:unknown";
+      addNotification({
+        type: "warning",
+        title,
+        message,
+        duration: 4000,
+        dedupeKey,
+      });
     },
-    [assets]
+    [addNotification]
   );
 
   const makeDragProps = useCallback(
@@ -46,16 +123,31 @@ export function useDragAssets(
       return {
         onMouseDown: (e: React.MouseEvent<HTMLElement>) => {
           if (e.button !== 0) return;
-          e.preventDefault(); // 阻止文本选中干扰拖拽
-          console.log("[drag] mousedown on", assetId);
+          e.preventDefault();
+
+          const ids = selectedRef.current.has(assetId)
+            ? Array.from(selectedRef.current)
+            : [assetId];
+
+          // 立即在 user gesture 上下文 kick off IPC（task_008 AC-3 关键时序）
+          const payloadPromise = invoke<OutboundEntry[]>(
+            "prepare_outbound_payload",
+            { assetIds: ids }
+          );
+          // 必须挂一个 catch 防止 unhandled rejection；真正消费在阈值跨过之后
+          payloadPromise.catch(() => {
+            /* swallow here; handled when threshold crossed or discarded on click */
+          });
+
           pendingDragRef.current = {
             assetId,
             startX: e.clientX,
             startY: e.clientY,
+            ids,
+            payloadPromise,
           };
           isDraggingRef.current = false;
 
-          // 将 mousemove/mouseup 挂到 window，确保鼠标移出卡片后仍能追踪
           function onMouseMove(ev: MouseEvent) {
             const pending = pendingDragRef.current;
             if (!pending || isDraggingRef.current) return;
@@ -72,28 +164,26 @@ export function useDragAssets(
             pendingDragRef.current = null;
             cleanup();
 
-            const ids = selectedAssetIds.has(pending.assetId)
-              ? Array.from(selectedAssetIds)
-              : [pending.assetId];
-            const filePaths = resolveFilePaths(ids);
-            console.log("[drag] threshold crossed, filePaths:", filePaths, "icon:", dragIconRef.current);
-            if (filePaths.length === 0) {
-              console.warn("[drag] no filePaths resolved for ids:", ids);
-              return;
-            }
-
-            void startDrag({
-              item: filePaths,
-              icon: dragIconRef.current,
-              mode: "copy",
-            }).then(() => {
-              console.log("[drag] startDrag success");
-            }).catch((err) => {
-              console.error("[drag] startDrag error:", err);
-            });
+            pending.payloadPromise
+              .then((entries) => {
+                if (!entries || entries.length === 0) {
+                  console.warn("[drag] outbound payload empty for ids:", pending.ids);
+                  return;
+                }
+                return startDrag({
+                  item: entries.map((e) => e.path),
+                  icon: dragIconRef.current,
+                  mode: "copy",
+                });
+              })
+              .catch((err) => {
+                console.error("[drag] prepare_outbound_payload / startDrag error:", err);
+                toast(err);
+              });
           }
 
           function onMouseUp() {
+            // 用户点击未触发拖拽：丢弃 payload promise（已挂 catch 不会泄漏）
             pendingDragRef.current = null;
             isDraggingRef.current = false;
             cleanup();
@@ -109,7 +199,7 @@ export function useDragAssets(
         },
       };
     },
-    [selectedAssetIds, resolveFilePaths]
+    [toast]
   );
 
   return { makeDragProps };

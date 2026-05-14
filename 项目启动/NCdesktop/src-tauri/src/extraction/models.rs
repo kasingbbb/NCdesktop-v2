@@ -32,6 +32,15 @@ pub struct ExtractOptions {
     pub max_pages: Option<u32>,
     pub markitdown_enabled: bool,
     pub markitdown_python_cmd: Option<String>,
+    /// 嵌入式 venv 内的 python 解释器绝对路径（task_008 scheduler 通过 AppHandle 注入）
+    pub markitdown_embedded_python: Option<String>,
+    /// task_014 Fix-A3：讯飞非实时转写 language 参数（默认 "cn"，可被 setting `iflytekLanguage` 覆盖）。
+    /// None / 空字符串视为使用默认 "cn"。
+    pub iflytek_language: Option<String>,
+    /// task_007 FIX：runtime 自检失败时的 FailureCode 快照（scheduler 路由前注入）。
+    /// `Some(code)` → markitdown extract 入口立即短路返回（不进 python 子进程）；
+    /// `None` → 自检通过（或调用方未注入），走常规路径。
+    pub runtime_check_failed: Option<crate::extraction::failure_code::FailureCode>,
 }
 
 pub fn markdown_to_segments(markdown: &str) -> Vec<ContentSegment> {

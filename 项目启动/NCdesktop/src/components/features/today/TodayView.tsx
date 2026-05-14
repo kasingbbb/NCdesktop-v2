@@ -199,33 +199,35 @@ function CoursePrepPanel({ libraryId, onOpenUnit }: Props) {
 
   return (
     <div className="tdv-panel" data-testid="tdv-panel-course-prep">
-      {/* 顶部问候 */}
+      {/* 顶部问候（v1.3 task_010 ES-03：去除庆祝 emoji，文案中性陈述） */}
       <div className="tdv-header">
         <div className="tdv-date">{today}</div>
         <div className="tdv-headline">
           {prioritized.length === 0
-            ? "今天没有待处理的知识单元 🎉"
+            ? "今日无待处理"
             : `有 ${prioritized.length} 个知识单元等待你`}
         </div>
       </div>
 
-      {/* 统计行 */}
-      <div className="tdv-stats-row">
-        <div className="tdv-stat">
-          <span className="tdv-stat-value">{stats.total}</span>
-          <span className="tdv-stat-label">知识单元</span>
+      {/* 统计行（v1.3 task_010 ES-02：全 0 时整行不渲染） */}
+      {(stats.total > 0 || stats.validated > 0 || stats.mastered > 0) && (
+        <div className="tdv-stats-row" data-testid="tdv-stats-row">
+          <div className="tdv-stat">
+            <span className="tdv-stat-value">{stats.total}</span>
+            <span className="tdv-stat-label">知识单元</span>
+          </div>
+          <div className="tdv-stat-divider" />
+          <div className="tdv-stat">
+            <span className="tdv-stat-value">{stats.validated}</span>
+            <span className="tdv-stat-label">已核对</span>
+          </div>
+          <div className="tdv-stat-divider" />
+          <div className="tdv-stat">
+            <span className="tdv-stat-value">{stats.mastered}</span>
+            <span className="tdv-stat-label">已掌握</span>
+          </div>
         </div>
-        <div className="tdv-stat-divider" />
-        <div className="tdv-stat">
-          <span className="tdv-stat-value">{stats.validated}</span>
-          <span className="tdv-stat-label">已核对</span>
-        </div>
-        <div className="tdv-stat-divider" />
-        <div className="tdv-stat">
-          <span className="tdv-stat-value">{stats.mastered}</span>
-          <span className="tdv-stat-label">已掌握</span>
-        </div>
-      </div>
+      )}
 
       <div className="tdv-content">
         {/* 主卡：最重要的一件事 */}
@@ -238,10 +240,10 @@ function CoursePrepPanel({ libraryId, onOpenUnit }: Props) {
             <MainActionCard unit={mainCard} onOpen={onOpenUnit} />
           </section>
         ) : (
-          <div className="tdv-empty">
+          <div className="tdv-empty" data-testid="tdv-empty">
             <BookOpen size={32} className="tdv-empty-icon" />
-            <p>所有知识单元都已处理完毕！</p>
-            <p className="tdv-empty-sub">添加新素材后这里会出现新任务</p>
+            <p>今日无待处理</p>
+            <p className="tdv-empty-sub">导入素材后这里会自动生成任务</p>
           </div>
         )}
 

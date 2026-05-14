@@ -3,8 +3,10 @@ import type { WorkspaceFolderEntry } from "../../types";
 import {
   moveAssetToWorkspaceFolder,
   revealProjectWorkspaceFolder,
+  revealSourceFile,
 } from "../../lib/tauri-commands";
 import { useAssetStore } from "../../stores/assetStore";
+import { useUIStore } from "../../stores/uiStore";
 
 interface AssetContextMenuProps {
   x: number;
@@ -16,6 +18,21 @@ interface AssetContextMenuProps {
   projectId: string;
   /** 用于判断当前所在文件夹，灰显对应子菜单项 */
   currentFilePath: string;
+  /**
+   * task_011 AC-1：右键目标资产的源文件路径（来自 `Asset.sourceData`），用于
+   * "查看原文件"项。若为空字符串则按 sourceMissing=true 处理。
+   */
+  sourcePath?: string | null;
+  /**
+   * task_011 AC-1 / AC-2：源文件已在磁盘缺失（后端 task_007 启动扫描）。
+   * 为 true 时"查看原文件"项 disabled + 文案改为「原文件已不存在」。
+   */
+  sourceMissing?: boolean;
+  /**
+   * task_011 AC-6：父级触发 rename Modal 的回调（替代原生 prompt）。
+   * 必须在调用 `onClose` 之前/之后调用以便菜单关闭后弹窗。
+   */
+  onRequestRename?: (assetId: string) => void;
   onClose: () => void;
   onMoved: () => void;
 }
@@ -29,6 +46,9 @@ export function AssetContextMenu({
   workspaceFolders,
   projectId,
   currentFilePath,
+  sourcePath,
+  sourceMissing,
+  onRequestRename,
   onClose,
   onMoved,
 }: AssetContextMenuProps) {
@@ -114,6 +134,34 @@ export function AssetContextMenu({
       await revealProjectWorkspaceFolder(projectId, "__ROOT__");
     } catch (err) {
       console.error("[AssetContextMenu] revealProjectWorkspaceFolder failed:", err);
+    }
+    onClose();
+  }
+
+  function handleRename() {
+    // task_011 AC-6：迁移到应用内 Modal。父级在 onClose 后渲染 RenameAssetModal。
+    onRequestRename?.(assetId);
+    onClose();
+  }
+
+  // task_011 AC-1：查看原文件
+  const hasSourcePath = typeof sourcePath === "string" && sourcePath.trim().length > 0;
+  const revealSourceDisabled = !hasSourcePath || sourceMissing === true;
+  const revealSourceLabel = sourceMissing === true ? "原文件已不存在" : "查看原文件";
+
+  async function handleRevealSource() {
+    if (revealSourceDisabled || !hasSourcePath) return;
+    try {
+      await revealSourceFile(sourcePath as string);
+    } catch (err) {
+      console.error("[AssetContextMenu] revealSourceFile failed:", err);
+      useUIStore.getState().addNotification({
+        type: "warning",
+        title: "无法显示原文件",
+        message: String(err),
+        duration: 4000,
+        dedupeKey: "reveal_source:err",
+      });
     }
     onClose();
   }
@@ -297,7 +345,59 @@ export function AssetContextMenu({
         }}
       />
 
-      {/* 在 Finder 中显示 */}
+      {/* 重命名（仅单选生效；多选时只重命名右键目标） */}
+      <button
+        type="button"
+        style={menuItemStyle}
+        disabled={targetIds.length > 1}
+        onMouseEnter={(e) => {
+          if (targetIds.length <= 1) {
+            (e.currentTarget as HTMLButtonElement).style.background =
+              "var(--surface-secondary)";
+          }
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+        }}
+        onClick={() => void handleRename()}
+        aria-label="重命名"
+      >
+        重命名
+        {targetIds.length > 1 ? (
+          <span style={{ marginLeft: "auto", fontSize: 10, color: "var(--text-tertiary)" }}>
+            （多选不可用）
+          </span>
+        ) : null}
+      </button>
+
+      {/* task_011 AC-1：查看原文件（在 Finder 中高亮原始源文件） */}
+      <button
+        type="button"
+        style={{
+          ...menuItemStyle,
+          opacity: revealSourceDisabled ? 0.45 : 1,
+          cursor: revealSourceDisabled ? "not-allowed" : "pointer",
+        }}
+        disabled={revealSourceDisabled}
+        data-testid="ctx-reveal-source"
+        data-disabled={revealSourceDisabled ? "true" : "false"}
+        aria-label={revealSourceLabel}
+        onMouseEnter={(e) => {
+          if (!revealSourceDisabled) {
+            (e.currentTarget as HTMLButtonElement).style.background =
+              "var(--surface-secondary)";
+          }
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+        }}
+        onClick={() => void handleRevealSource()}
+        title={revealSourceDisabled ? "原文件不存在或路径未知" : "在 Finder 中高亮原始源文件"}
+      >
+        {revealSourceLabel}
+      </button>
+
+      {/* 在 Finder 中显示（工作区目录） */}
       <button
         type="button"
         style={menuItemStyle}

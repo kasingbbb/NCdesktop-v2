@@ -11,45 +11,50 @@ export function DropzoneIdle({ isAttract = false }: DropzoneIdleProps) {
   return (
     <button
       onClick={toggleExpand}
-      className="glass-panel glass-interactive flex flex-col items-center justify-center cursor-pointer relative overflow-hidden group"
+      className="flex flex-col items-center justify-center cursor-pointer relative overflow-hidden group"
       style={{
         width: "clamp(64px, 18vw, 88px)",
         height: "clamp(64px, 18vw, 88px)",
         borderRadius: 28,
-        boxShadow: isAttract ? "var(--shadow-sm)" : "var(--shadow-sm)",
+        boxShadow: isAttract
+          ? "0 0 20px rgba(59,130,246,0.3)"
+          : "0 2px 8px rgba(0,0,0,0.3)",
         border: isAttract
-          ? "2px solid var(--border-active)"
-          : "1px solid var(--border-primary)",
+          ? "2px solid #3b82f6"
+          : "1px solid #2d3a50",
         background: isAttract
-          ? "linear-gradient(135deg, var(--surface-tertiary) 0%, var(--surface-primary) 100%)"
-          : "var(--surface-primary)",
+          ? "linear-gradient(135deg, #1e3a5f 0%, #1a2233 100%)"
+          : "#1e2940",
         transition: "all var(--duration-normal) var(--ease-spring)",
       }}
     >
       {/* 吸引状态动效脉冲 */}
       {isAttract && (
-        <div 
+        <div
           className="absolute inset-0 rounded-[28px]"
           style={{
-            border: "2px solid #9ca3af",
-            animation: "magic-pulse 1.5s infinite var(--ease-out-expo)"
+            border: "2px solid rgba(59,130,246,0.5)",
+            animation: "magic-pulse 1.5s infinite var(--ease-out-expo)",
           }}
         />
       )}
 
-      <div className="flex flex-col items-center justify-center gap-[2px] z-10 transition-transform duration-300 group-hover:scale-105">
-        <Sparkles 
-          size={isAttract ? 28 : 22} 
-          className="transition-all duration-300"
+      <div
+        className="flex flex-col items-center justify-center gap-[2px] z-10 group-hover:scale-105"
+        style={{ transition: "transform var(--duration-normal)" }}
+      >
+        <Sparkles
+          size={isAttract ? 28 : 22}
           style={{
-            color: isAttract ? "var(--text-primary)" : "var(--brand-navy)",
+            color: isAttract ? "#93c5fd" : "#3b82f6",
+            transition: "all var(--duration-normal)",
           }}
           strokeWidth={2}
         />
         {!isAttract && (
           <span
             className="text-[9px] font-bold tracking-widest uppercase"
-            style={{ color: "var(--text-secondary)", opacity: 0.8 }}
+            style={{ color: "rgba(255,255,255,0.5)" }}
           >
             Drop
           </span>

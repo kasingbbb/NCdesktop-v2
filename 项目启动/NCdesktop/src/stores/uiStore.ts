@@ -88,6 +88,15 @@ interface UIStore {
   /** 学习模式刚由 OFF→ON 的瞬态信号（不持久化） */
   _learningJustEnabled: boolean;
 
+  // ── 工作区文件夹列表编辑态（task_006 T4，瞬态，不进 partialize） ──
+  editingFolderPath: string | null;
+  pendingNewFolder: boolean;
+  pendingRenameIds: Set<string>;
+  dragOverPath: string | null;
+
+  /** TagTree 展开状态（v1.3 SB-05，默认 false，持久化） */
+  tagsExpanded: boolean;
+
   setLayoutMode: (mode: LayoutMode) => void;
   setSidebarSection: (section: SidebarSection) => void;
   toggleInspector: () => void;
@@ -106,9 +115,24 @@ interface UIStore {
   setCoursePreviewReturnTo: (target: CoursePreviewReturnTo | null) => void;
   setTodayLastTab: (tab: TodayTab | null) => void;
   setLearningJustEnabled: (flag: boolean) => void;
+  startCreating: () => void;
+  cancelCreating: () => void;
+  startRenaming: (path: string) => void;
+  finishRename: (path: string) => void;
+  setDragOverPath: (path: string | null) => void;
+  setTagsExpanded: (expanded: boolean) => void;
 }
 
 let notificationId = 0;
+
+/**
+ * task_011 AC-5：dedupeKey 滑动窗口（毫秒）。
+ * 相同 key 在窗口内的新 toast 会**替换**已存在的同 key 条目（保留最新文案），
+ * 而不是再 push 一条。窗口外则照常新增。
+ */
+const DEDUPE_WINDOW_MS = 3000;
+/** key → 最近一次该 key 命中的时间戳（毫秒） */
+const dedupeLastSeen = new Map<string, number>();
 
 export const useUIStore = create<UIStore>()(
   persist(
@@ -138,6 +162,11 @@ export const useUIStore = create<UIStore>()(
       coursePreviewReturnTo: null,
       todayLastTab: null,
       _learningJustEnabled: false,
+      editingFolderPath: null,
+      pendingNewFolder: false,
+      pendingRenameIds: new Set<string>(),
+      dragOverPath: null,
+      tagsExpanded: false,
 
       setLayoutMode: (mode) => set({ layoutMode: mode }),
 
@@ -164,6 +193,35 @@ export const useUIStore = create<UIStore>()(
           id,
           createdAt: new Date().toISOString(),
         };
+        // task_011 AC-5：dedupeKey 命中（3s 窗口内）→ 替换已存在的同 key 条目
+        const key = n.dedupeKey;
+        const now = Date.now();
+        if (key) {
+          const last = dedupeLastSeen.get(key);
+          const inWindow = typeof last === "number" && now - last < DEDUPE_WINDOW_MS;
+          dedupeLastSeen.set(key, now);
+          if (inWindow) {
+            set((s) => {
+              const existingIdx = s.notifications.findIndex(
+                (item) => item.dedupeKey === key
+              );
+              if (existingIdx >= 0) {
+                const next = s.notifications.slice();
+                next[existingIdx] = notification;
+                return { notifications: next };
+              }
+              return { notifications: [...s.notifications, notification] };
+            });
+            if (n.duration > 0) {
+              setTimeout(() => {
+                set((s) => ({
+                  notifications: s.notifications.filter((item) => item.id !== id),
+                }));
+              }, n.duration);
+            }
+            return;
+          }
+        }
         set((s) => ({
           notifications: [...s.notifications, notification],
         }));
@@ -200,6 +258,33 @@ export const useUIStore = create<UIStore>()(
       setTodayLastTab: (tab) => set({ todayLastTab: tab }),
 
       setLearningJustEnabled: (flag) => set({ _learningJustEnabled: flag }),
+
+      startCreating: () =>
+        set({ pendingNewFolder: true, editingFolderPath: null }),
+
+      cancelCreating: () => set({ pendingNewFolder: false }),
+
+      startRenaming: (path) =>
+        set((s) => {
+          const next = new Set(s.pendingRenameIds);
+          next.add(path);
+          return { pendingRenameIds: next, editingFolderPath: path };
+        }),
+
+      finishRename: (path) =>
+        set((s) => {
+          const next = new Set(s.pendingRenameIds);
+          next.delete(path);
+          return {
+            pendingRenameIds: next,
+            editingFolderPath:
+              s.editingFolderPath === path ? null : s.editingFolderPath,
+          };
+        }),
+
+      setDragOverPath: (path) => set({ dragOverPath: path }),
+
+      setTagsExpanded: (expanded) => set({ tagsExpanded: expanded }),
     }),
     {
       name: "ui-store",
@@ -207,15 +292,19 @@ export const useUIStore = create<UIStore>()(
       partialize: (s) => ({
         activeSidebarSection: s.activeSidebarSection,
         todayLastTab: s.todayLastTab,
+        tagsExpanded: s.tagsExpanded,
       }),
       migrate: (persisted) => {
         const raw = (persisted as { activeSidebarSection?: unknown } | undefined)
           ?.activeSidebarSection;
         const rawTab = (persisted as { todayLastTab?: unknown } | undefined)
           ?.todayLastTab;
+        const rawTagsExpanded = (persisted as { tagsExpanded?: unknown } | undefined)
+          ?.tagsExpanded;
         return {
           activeSidebarSection: migrateLegacySection(raw),
           todayLastTab: migrateLegacyTodayTab(rawTab),
+          tagsExpanded: typeof rawTagsExpanded === "boolean" ? rawTagsExpanded : false,
         };
       },
     },

@@ -13,16 +13,22 @@
 
 :root {
   /* ═══ 表面色 (Surface) ═══ */
-  /* 窗口画布：冷灰蓝，衬托中间白面板 */
-  --surface-canvas: #e8edf4;
+  --surface-canvas: #f0f4f8;
   --surface-primary: #ffffff;
-  /* 侧栏 / 次要面板：极浅冷白 */
   --surface-secondary: #f8fafc;
   --surface-tertiary: #f1f5f9;
   --surface-elevated: #ffffff;
-  /* 侧栏选中：柔和琥珀（对齐参考图「标签/选中」） */
-  --sidebar-active-bg: #ffedd5;
-  --sidebar-active-fg: #9a3412;
+
+  /* ═══ 侧栏深色驾驶舱 ═══ */
+  --sidebar-bg: #1a2233;
+  --sidebar-border: #2d3a50;
+  --sidebar-divider: rgba(255, 255, 255, 0.08);
+  --sidebar-text: rgba(255, 255, 255, 0.85);
+  --sidebar-text-muted: rgba(255, 255, 255, 0.6);
+  --sidebar-text-dim: rgba(255, 255, 255, 0.4);
+  --sidebar-hover-bg: rgba(255, 255, 255, 0.07);
+  --sidebar-active-bg: rgba(59, 130, 246, 0.15);
+  --sidebar-active-fg: #93c5fd;
 
   /* ═══ 边框色 (Borders) — 1px 浅 slate ═══ */
   --border-primary: #e2e8f0;
@@ -69,9 +75,8 @@
 
   /* ═══ 语义色 ═══ */
   --color-primary: var(--brand-navy);
-  /* 界面高亮：琥珀（参考图）；主按钮仍可用海军蓝 */
-  --color-accent: #ea580c;
-  --color-accent-soft: #fff7ed;
+  --color-accent: #3b82f6;
+  --color-accent-soft: #dbeafe;
   --color-success: #34c759;
   --color-warning: #ff9500;
   --color-danger: #ff3b30;
@@ -121,6 +126,10 @@
   --ai-surface: #f5f3ff;
   --ai-border: #e9e5ff;
 
+  /* ═══ 原件窗格底色 ═══ */
+  --raw-pane-bg: #f4f6f9;
+  --raw-pane-border: #dde3ec;
+
   /* ═══ 时间流窗格：分区底色与强调条（可读性）═══ */
   --timeline-scroll-bg: #dce4ef;
   --timeline-rail-bg: #e8f0f7;
@@ -144,8 +153,10 @@
     --surface-secondary: #14161c;
     --surface-tertiary: #1c1f26;
     --surface-elevated: #1a1d24;
-    --sidebar-active-bg: #431407;
-    --sidebar-active-fg: #fdba74;
+    --sidebar-bg: #0d1117;
+    --sidebar-border: #1c2333;
+    --sidebar-active-bg: rgba(59, 130, 246, 0.2);
+    --sidebar-active-fg: #93c5fd;
 
     --border-primary: #2d3340;
     --border-hover: #475569;
@@ -181,8 +192,10 @@
   --surface-secondary: #14161c;
   --surface-tertiary: #1c1f26;
   --surface-elevated: #1a1d24;
-  --sidebar-active-bg: #431407;
-  --sidebar-active-fg: #fdba74;
+  --sidebar-bg: #0d1117;
+  --sidebar-border: #1c2333;
+  --sidebar-active-bg: rgba(59, 130, 246, 0.2);
+  --sidebar-active-fg: #93c5fd;
 
   --border-primary: #2d3340;
   --border-hover: #475569;
@@ -296,6 +309,18 @@ textarea,
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+/* Toast 入场动画 */
+@keyframes toastEnter {
+  from {
+    transform: translateX(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
   }
 }
 
