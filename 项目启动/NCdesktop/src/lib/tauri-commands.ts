@@ -722,6 +722,33 @@ export async function retriggerExtraction(assetId: string): Promise<void> {
   return invoke<void>("retrigger_extraction", { assetId });
 }
 
+// ── 提取流水线查询/触发（与 extractionStore 对齐）─────────────────────────
+import type { ExtractedContent, PipelineProgress } from "../types/extraction";
+
+export async function extractAsset(assetId: string): Promise<string> {
+  return invoke<string>("extract_asset", { assetId });
+}
+
+export async function extractProjectAssets(projectId: string): Promise<string> {
+  return invoke<string>("extract_project_assets", { projectId });
+}
+
+export async function getExtractionStatus(
+  assetId: string,
+): Promise<ExtractedContent | null> {
+  return invoke<ExtractedContent | null>("get_extraction_status", { assetId });
+}
+
+export async function getExtractedContent(
+  assetId: string,
+): Promise<ExtractedContent | null> {
+  return invoke<ExtractedContent | null>("get_extracted_content", { assetId });
+}
+
+export async function getPipelineProgress(): Promise<PipelineProgress> {
+  return invoke<PipelineProgress>("get_pipeline_progress");
+}
+
 // task_006 AC-1（M5）：工作区"重试转换"命令唯一入口。
 // 本函数是后端 `retry_asset_conversion` 的薄包装，内部转发到
 // `retrigger_extraction`，提供与 asset 视角对齐的命名。幂等性由后端三道

@@ -164,21 +164,36 @@ export function useDragAssets(
             pendingDragRef.current = null;
             cleanup();
 
+            const fallbackPaths = pending.ids
+              .map((id) => assetsRef.current.find((a) => a.id === id)?.filePath)
+              .filter((p): p is string => !!p);
+
             pending.payloadPromise
               .then((entries) => {
-                if (!entries || entries.length === 0) {
-                  console.warn("[drag] outbound payload empty for ids:", pending.ids);
-                  return;
-                }
+                const paths =
+                  entries && entries.length > 0
+                    ? entries.map((e) => e.path)
+                    : fallbackPaths;
+                if (paths.length === 0) return;
                 return startDrag({
-                  item: entries.map((e) => e.path),
+                  item: paths,
                   icon: dragIconRef.current,
                   mode: "copy",
                 });
               })
               .catch((err) => {
-                console.error("[drag] prepare_outbound_payload / startDrag error:", err);
-                toast(err);
+                // 非 done / mixed / renditionMissing 等：静默回退到原件路径，
+                // 让任意素材都能拖出到外部文件夹（task: bug #4）。
+                console.warn("[drag] outbound payload unavailable, fallback to source:", err);
+                if (fallbackPaths.length === 0) {
+                  toast(err);
+                  return;
+                }
+                void startDrag({
+                  item: fallbackPaths,
+                  icon: dragIconRef.current,
+                  mode: "copy",
+                });
               });
           }
 

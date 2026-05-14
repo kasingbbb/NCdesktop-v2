@@ -231,6 +231,11 @@ pub fn run() {
             commands::conversion::get_conversion_meta,
             commands::extraction::retrigger_extraction,
             commands::extraction::retry_asset_conversion,
+            commands::extraction::extract_asset,
+            commands::extraction::extract_project_assets,
+            commands::extraction::get_extraction_status,
+            commands::extraction::get_extracted_content,
+            commands::extraction::get_pipeline_progress,
             commands::outbound::prepare_outbound_payload,
             commands::source_view::reveal_source_file,
             #[cfg(debug_assertions)]

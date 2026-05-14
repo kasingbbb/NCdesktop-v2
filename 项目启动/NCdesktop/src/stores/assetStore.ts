@@ -80,7 +80,7 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
   assetTagNamesById: {},
   selectedAssetId: null,
   selectedAssetIds: new Set<string>(),
-  viewMode: "grid",
+  viewMode: "list",
   sortConfig: { field: "capturedAt", direction: "desc" },
   isLoading: false,
   error: null,

@@ -139,7 +139,7 @@ export const useUIStore = create<UIStore>()(
     (set) => ({
       layoutMode: "three-column",
       activeSidebarSection: "recent",
-      inspectorOpen: true,
+      inspectorOpen: false,
       rightPanelMode: "inspector",
       sidebarWidth: 220,
       activeModal: null,

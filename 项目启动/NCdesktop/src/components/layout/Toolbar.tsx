@@ -1,8 +1,6 @@
 import { Search, Plus, LayoutGrid, List, ChevronLeft, Loader2, PanelRight, Lightbulb } from "lucide-react";
 import { useProjectStore } from "../../stores/projectStore";
-import { useSearchStore } from "../../stores/searchStore";
 import { useLibraryStore } from "../../stores/libraryStore";
-import { useAssetStore } from "../../stores/assetStore";
 import { useUIStore } from "../../stores/uiStore";
 
 interface ToolbarProps {
@@ -18,8 +16,6 @@ export function Toolbar({ onSearchOpen }: ToolbarProps) {
     activeProjectId,
     getActiveProject,
   } = useProjectStore();
-  const assetViewMode = useAssetStore((s) => s.viewMode);
-  const setAssetViewMode = useAssetStore((s) => s.setViewMode);
   const { activeLibraryId, ensureActiveLibrary } = useLibraryStore();
   const { inspectorOpen, toggleInspector, setRightPanelMode } = useUIStore();
 
@@ -90,40 +86,6 @@ export function Toolbar({ onSearchOpen }: ToolbarProps) {
             <Lightbulb size={12} />
             知识关联
           </button>
-          {/* 视图切换 */}
-          <div
-            className="flex rounded-[var(--radius-lg)] p-[2px] gap-[1px]"
-            style={{ border: "1px solid var(--border-primary)", background: "var(--surface-tertiary)" }}
-          >
-            <button
-              type="button"
-              className="w-[26px] h-[26px] flex items-center justify-center rounded-[var(--radius-sm)] transition-colors"
-              title="列表视图"
-              onClick={() => setAssetViewMode("list")}
-              style={{
-                color: assetViewMode === "list" ? "var(--text-primary)" : "var(--text-tertiary)",
-                background: assetViewMode === "list" ? "var(--surface-primary)" : "transparent",
-                border: assetViewMode === "list" ? "1px solid var(--border-primary)" : "1px solid transparent",
-                boxShadow: assetViewMode === "list" ? "var(--shadow-sm)" : "none",
-              }}
-            >
-              <List size={13} />
-            </button>
-            <button
-              type="button"
-              className="w-[26px] h-[26px] flex items-center justify-center rounded-[var(--radius-sm)] transition-colors"
-              title="图标视图"
-              onClick={() => setAssetViewMode("grid")}
-              style={{
-                color: assetViewMode === "grid" ? "var(--text-primary)" : "var(--text-tertiary)",
-                background: assetViewMode === "grid" ? "var(--surface-primary)" : "transparent",
-                border: assetViewMode === "grid" ? "1px solid var(--border-primary)" : "1px solid transparent",
-                boxShadow: assetViewMode === "grid" ? "var(--shadow-sm)" : "none",
-              }}
-            >
-              <LayoutGrid size={13} />
-            </button>
-          </div>
           {/* Inspector 切换 */}
           <button
             type="button"

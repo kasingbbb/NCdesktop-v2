@@ -671,8 +671,6 @@ export function AssetListView() {
                         const state = a.state;
                         // task_011 AC-2 / AC-4
                         const sourceMissing = a.sourceMissing === true;
-                        const notDone = state !== undefined && state !== "done";
-                        const stateBadgeTitlePrefix = notDone ? "无法拖出 · " : "";
                         return (
                           <li
                             key={a.id}
@@ -685,7 +683,6 @@ export function AssetListView() {
                               onClick={(e) => handleCardClick(e, a.id)}
                               onContextMenu={(e) => handleCardContextMenu(e, a.id, "right")}
                               {...makeDragProps(a.id)}
-                              data-cursor={notDone ? "not-allowed" : "grab"}
                               className="w-full text-left px-3 py-2.5 flex items-start gap-2 rounded-[var(--radius-md)] border border-app transition-colors hover:border-[var(--border-hover)] focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--border-active)] bg-[var(--surface-primary)]"
                               style={{
                                 background: selectedAssetIds.has(a.id)
@@ -696,9 +693,7 @@ export function AssetListView() {
                                 outline: selectedAssetIds.has(a.id)
                                   ? "2px solid var(--brand-navy)"
                                   : undefined,
-                                cursor: notDone ? "not-allowed" : "grab",
                               }}
-                              title={notDone ? "无法拖出：当前状态非 done" : undefined}
                             >
                               <span className="shrink-0 mt-0.5">{assetIcon(a, 18)}</span>
                               <span className="min-w-0 flex-1">
@@ -728,10 +723,7 @@ export function AssetListView() {
                                     </span>
                                   ) : null}
                                   {state ? (
-                                    <span
-                                      className="shrink-0"
-                                      title={stateBadgeTitlePrefix || undefined}
-                                    >
+                                    <span className="shrink-0">
                                       <AssetStateBadge
                                         state={state}
                                         assetId={a.id}
