@@ -221,6 +221,7 @@ export function AssetListView() {
   }, [displayAssets]);
 
   const addNotification = useUIStore((s) => s.addNotification);
+  const setInspectorOpen = useUIStore((s) => s.setInspectorOpen);
 
   const handleRetried = useCallback(
     (assetId: string) => {
@@ -304,9 +305,10 @@ export function AssetListView() {
       } else {
         selectAsset(assetId);
         setSelectedAssetIds(new Set([assetId]));
+        setInspectorOpen(true);
       }
     },
-    [selectAsset, toggleSelectAsset, setSelectedAssetIds]
+    [selectAsset, toggleSelectAsset, setSelectedAssetIds, setInspectorOpen]
   );
 
   const handleCardContextMenu = useCallback(
