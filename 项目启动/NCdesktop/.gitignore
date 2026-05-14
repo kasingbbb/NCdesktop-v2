@@ -21,6 +21,9 @@ src-tauri/gen/
 .env.local
 *.local
 
+# 私有分发凭据（编译期烤入二进制，本地保留、绝不进 git）
+src-tauri/.bundled-creds.env
+
 # IDE
 .vscode/
 !.vscode/extensions.json

@@ -1,8 +1,29 @@
 fn main() {
     tauri_build::build();
+    inject_bundled_creds();
 
     #[cfg(target_os = "macos")]
     macos_bridges::build();
+}
+
+/// 从 src-tauri/.bundled-creds.env（**gitignored**）读取私有分发凭据，
+/// 在编译期通过 `cargo:rustc-env` 注入，再由 client.rs 里的 `option_env!`
+/// 捡起、烤进二进制。文件不存在则跳过（dev/公共构建保持洁净）。
+fn inject_bundled_creds() {
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let path = std::path::Path::new(&manifest).join(".bundled-creds.env");
+    println!("cargo:rerun-if-changed=.bundled-creds.env");
+    let Ok(content) = std::fs::read_to_string(&path) else { return; };
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') { continue; }
+        let Some((k, v)) = line.split_once('=') else { continue; };
+        let k = k.trim();
+        let v = v.trim().trim_matches('"').trim_matches('\'');
+        if !k.is_empty() {
+            println!("cargo:rustc-env={k}={v}");
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
