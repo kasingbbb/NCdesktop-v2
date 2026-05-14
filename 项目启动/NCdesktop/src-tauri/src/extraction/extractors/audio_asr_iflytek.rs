@@ -31,10 +31,18 @@ const QUERY_PATH: &str = "/v2/getResult";
 const POLL_INTERVAL_SECS: u64 = 10;
 const POLL_MAX_RETRIES: u32 = 180; // 180 × 10s = 30 分钟
 
-/// task_014 Fix-A3：language 默认值。
-/// 用户讯飞应用密钥不支持 `autodialect`（错误 code=100020），改为 "cn"；
-/// 通过 `ExtractOptions.iflytek_language` 可由 setting `iflytekLanguage` 覆盖。
+/// language 默认值。历史 task_014 Fix-A3 写死为 "cn"，但实测部分账号 SKU 返回
+/// `code=100020 language[cn] does not support`，需要回退到其他候选值。
+/// 通过 `ExtractOptions.iflytek_language` 可由 setting `iflytekLanguage` 显式覆盖。
 const DEFAULT_IFLYTEK_LANGUAGE: &str = "cn";
+
+/// 当账号当前 language 值被讯飞拒收（code=100020）时，按顺序自动重试的候选值。
+/// 顺序覆盖：通用普通话 → 中文混合 → 自动方言 → 英文 → 空（让服务端用默认值）。
+/// 列表里的值会跳过等于"当前已尝试值"的项，避免无效重试。
+const IFLYTEK_LANGUAGE_FALLBACKS: &[&str] = &["cn", "mandarin", "cn_lay", "autodialect", "en", ""];
+
+/// 业务错误码：language 不支持。`fn submit_task` 命中后会换下一个候选语言重试。
+const IFLYTEK_CODE_LANGUAGE_UNSUPPORTED: &str = "100020";
 
 /// 选择 language 参数：option 非空 → option；否则 DEFAULT_IFLYTEK_LANGUAGE。
 fn resolve_language(opts: &ExtractOptions) -> String {
@@ -44,6 +52,27 @@ fn resolve_language(opts: &ExtractOptions) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or(DEFAULT_IFLYTEK_LANGUAGE)
         .to_string()
+}
+
+/// 给定"当前已被拒"的语言，返回应该尝试的下一个候选。返回 None 表示候选用尽。
+fn next_language_candidate(current: &str) -> Option<&'static str> {
+    let mut started_after_current = false;
+    for &cand in IFLYTEK_LANGUAGE_FALLBACKS {
+        if started_after_current && cand != current {
+            return Some(cand);
+        }
+        if cand == current {
+            started_after_current = true;
+        }
+    }
+    // 当前值不在候选表里（用户显式设置过特殊值）→ 从表头试
+    if !started_after_current {
+        return IFLYTEK_LANGUAGE_FALLBACKS
+            .iter()
+            .find(|c| **c != current)
+            .copied();
+    }
+    None
 }
 
 type HmacSha1 = Hmac<Sha1>;
@@ -187,8 +216,35 @@ impl Extractor for IflytekAsrExtractor {
 // ── 核心异步逻辑 ──────────────────────────────────────────────────────────
 
 async fn transcribe(file_path: &Path, language: &str) -> Result<ExtractionResult, ExtractionError> {
-    let order_id = submit_task(file_path, language).await?;
-    log::info!("[讯飞 ASR] 任务提交成功，orderId={}", order_id);
+    // 自动语言回退：账号 SKU 不同时 100020 (language does not support) 反复出现，
+    // 写死单值无法覆盖所有情况；这里在收到 100020 时按 IFLYTEK_LANGUAGE_FALLBACKS
+    // 顺序换下一个候选重试 submit_task，直到提交成功或候选用尽。
+    let mut current_lang = language.to_string();
+    let order_id = loop {
+        match submit_task(file_path, &current_lang).await {
+            Ok(id) => break id,
+            Err(ExtractionError::OcrError(msg))
+                if msg.contains(&format!("code={IFLYTEK_CODE_LANGUAGE_UNSUPPORTED}")) =>
+            {
+                match next_language_candidate(&current_lang) {
+                    Some(next) => {
+                        log::warn!(
+                            "[讯飞 ASR] language=\"{current_lang}\" 被服务端拒收（{IFLYTEK_CODE_LANGUAGE_UNSUPPORTED}），回退尝试 language=\"{next}\""
+                        );
+                        current_lang = next.to_string();
+                    }
+                    None => {
+                        return Err(ExtractionError::OcrError(format!(
+                            "讯飞 ASR：所有候选 language 均被账号拒收（最后一次 code={IFLYTEK_CODE_LANGUAGE_UNSUPPORTED}）。\
+                             请去讯飞控制台确认该 appId 实际开通的语言版本，并在 App 设置中配置 iflytekLanguage。原始错误: {msg}"
+                        )));
+                    }
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    };
+    log::info!("[讯飞 ASR] 任务提交成功，orderId={} language={current_lang}", order_id);
 
     let text = poll_result(&order_id).await?;
 
@@ -623,6 +679,30 @@ mod tests {
     fn test_signature_random_length() {
         let r = signature_random();
         assert_eq!(r.len(), 16);
+    }
+
+    /// 候选语言回退：当前值是表中某项 → 返回表中下一项
+    #[test]
+    fn next_language_candidate_returns_next_in_table() {
+        assert_eq!(next_language_candidate("cn"), Some("mandarin"));
+        assert_eq!(next_language_candidate("mandarin"), Some("cn_lay"));
+        assert_eq!(next_language_candidate("cn_lay"), Some("autodialect"));
+        assert_eq!(next_language_candidate("autodialect"), Some("en"));
+        assert_eq!(next_language_candidate("en"), Some(""));
+    }
+
+    /// 候选用尽：当前是表中最后一项 → None
+    #[test]
+    fn next_language_candidate_exhausted_returns_none() {
+        // "" 是 IFLYTEK_LANGUAGE_FALLBACKS 中最后一项
+        assert_eq!(next_language_candidate(""), None);
+    }
+
+    /// 用户传了表外的自定义值（首次尝试）→ 从表头第一个不同的值开始
+    #[test]
+    fn next_language_candidate_unknown_value_starts_from_head() {
+        let next = next_language_candidate("zh_custom").unwrap();
+        assert_eq!(next, "cn");
     }
 
     /// task_014 Fix-A3 AC-5：默认 language = "cn"（修复 code=100020 autodialect 不支持）
