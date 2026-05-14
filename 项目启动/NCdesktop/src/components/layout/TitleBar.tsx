@@ -11,12 +11,8 @@ export function TitleBar({ onSettingsOpen, onSearchOpen }: TitleBarProps) {
 
   return (
     <header className="titlebar-drag-region glass-titlebar flex items-center h-[48px] px-[var(--space-4)] relative">
-      {/* macOS 红绿灯留白 */}
-      <div className="w-[80px] shrink-0 flex items-center gap-[6px] pl-[16px]" data-no-drag>
-        <div className="w-[12px] h-[12px] rounded-full" style={{ background: "#ff5f56" }} />
-        <div className="w-[12px] h-[12px] rounded-full" style={{ background: "#febc2e" }} />
-        <div className="w-[12px] h-[12px] rounded-full" style={{ background: "#27c840" }} />
-      </div>
+      {/* macOS 红绿灯留白：系统按钮由 Tauri Overlay titleBarStyle 渲染，这里只保留宽度占位 */}
+      <div className="w-[80px] shrink-0" aria-hidden />
 
       {/* 面包屑 */}
       <div className="flex-1 flex items-center justify-center gap-[6px] text-[12px] tracking-[0.02em]" data-no-drag>
