@@ -3,14 +3,33 @@ import type { Asset, AssetViewMode, SortConfig } from "../types";
 import type { AIAnalysis, AssetType } from "../types/asset";
 import * as cmd from "../lib/tauri-commands";
 
-/** 后端 camelCase 为 assetType，统一映射到前端 `type` 供预览/Inspector 使用 */
+/**
+ * 后端 `get_assets` 现在返回 `WorkspaceAssetView`（task_003 / ADR-002），
+ * 而其它视图仍消费 `Asset` 形状。这里把后端 view 映射到 Asset 并并存
+ * 工作区派生字段（state / renditionPath 等），保证：
+ *  - `asset.type` 由 `assetType` 派生（旧消费者不变）
+ *  - `asset.state / renditionPath / sourceMissing / ...` 透传给工作区视图
+ *  - `asset.tags / aiAnalysis / source` 不存在于 view，回填默认值
+ */
 function normalizeAsset(a: Asset): Asset {
-  const r = a as Asset & { assetType?: string; originalName?: string };
+  const r = a as Asset & {
+    assetType?: string;
+    originalName?: string;
+    sourceData?: string | null;
+  };
   const t = (r.assetType ?? r.type ?? "other") as AssetType;
   const originalName =
     r.originalName && r.originalName.trim().length > 0 ? r.originalName : r.name;
-  const sourceData = (r as { sourceData?: string | null }).sourceData;
-  return { ...r, type: t, originalName, sourceData: sourceData ?? undefined };
+  return {
+    ...r,
+    type: t,
+    originalName,
+    sourceData: r.sourceData ?? undefined,
+    // WorkspaceAssetView 不带这些字段；为不破坏其它视图的 prop 类型签名，回填默认值
+    tags: r.tags ?? [],
+    aiAnalysis: r.aiAnalysis ?? null,
+    source: r.source ?? { type: "manual_import" },
+  };
 }
 
 interface AssetStore {
@@ -35,14 +54,20 @@ interface AssetStore {
     fileSize: number;
     mimeType: string;
   }) => Promise<Asset>;
+  /** @deprecated rename 场景请使用 {@link renameAsset}（ADR-007 双写 root + derivative）。
+   *  保留供 is_starred 等非 rename 的整行 Asset 更新使用。 */
   updateAsset: (asset: Asset) => Promise<void>;
+  /** 工作区 rename（ADR-007）：以 asset_id 为目标，后端双写 root.name + markdown 衍生件 .name。 */
+  renameAsset: (assetId: string, newDisplayName: string) => Promise<void>;
   deleteAsset: (id: string) => Promise<void>;
   toggleStar: (id: string) => Promise<void>;
   selectAsset: (id: string | null) => void;
   toggleSelectAsset: (id: string) => void;
   setSelectedAssetIds: (ids: Set<string>) => void;
   clearSelection: () => void;
+  /** 跨项目移动选中素材（BatchToolbar"移动到"路径）。从当前列表移除并清空选择。 */
   moveAssets: (assetIds: string[], targetProjectId: string) => Promise<void>;
+  /** 跨项目复制选中素材（BatchToolbar"复制到"路径）。当前列表不变，仅清空选择。 */
   copyAssets: (assetIds: string[], targetProjectId: string) => Promise<void>;
   setViewMode: (mode: AssetViewMode) => void;
   setSortConfig: (config: SortConfig) => void;
@@ -94,6 +119,17 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
     await cmd.updateAsset(asset);
     set((s) => ({
       assets: s.assets.map((a) => (a.id === asset.id ? asset : a)),
+    }));
+  },
+
+  renameAsset: async (assetId, newDisplayName) => {
+    // 后端双写 root + derivative.name 并返回最新 WorkspaceAssetView；
+    // 前端就地 patch name，避免再走 fetchAssets 整列表重拉。
+    const view = await cmd.renameAsset(assetId, newDisplayName);
+    set((s) => ({
+      assets: s.assets.map((a) =>
+        a.id === view.id ? { ...a, name: view.name } : a
+      ),
     }));
   },
 

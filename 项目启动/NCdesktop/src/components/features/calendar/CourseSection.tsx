@@ -65,54 +65,35 @@ export function CourseSection() {
   const toggleGroup = (key: string) =>
     setCollapsed((s) => ({ ...s, [key]: !s[key] }));
 
+  // PRD §9.1：TODAY 整组在无课时不渲染（由父调用方决定是否渲染整段课程区）
+  if (allEmpty) return null;
+
   return (
     <div className="mb-[var(--space-1)]">
-      {allEmpty ? (
-        <div className="mb-[var(--space-1)]">
-          <div className="w-full flex items-center gap-[var(--space-1)] px-[var(--space-3)] py-[var(--space-1)]">
-            <ChevronDown size={11} style={{ color: "var(--sidebar-text-dim)" }} />
-            <span
-              className="text-[10px] uppercase tracking-[0.08em] font-semibold"
-              style={{ color: "var(--sidebar-text-dim)" }}
-            >
-              Today
-            </span>
-          </div>
-          <p
-            className="px-[var(--space-5)] py-[var(--space-1)] text-[var(--text-xs)]"
-            style={{ color: "var(--sidebar-text-dim)" }}
-          >
-            今天没有课程
-          </p>
-        </div>
-      ) : (
-        <>
-          <SectionGroup
-            label="Today"
-            events={todayEvents}
-            selectedId={selectedEventId}
-            collapsed={!!collapsed["today"]}
-            onToggle={() => toggleGroup("today")}
-            onSelect={handleSelect}
-          />
-          <SectionGroup
-            label="Tomorrow"
-            events={tomorrowEvents}
-            selectedId={selectedEventId}
-            collapsed={!!collapsed["tomorrow"]}
-            onToggle={() => toggleGroup("tomorrow")}
-            onSelect={handleSelect}
-          />
-          <SectionGroup
-            label="This Week"
-            events={weekEvents}
-            selectedId={selectedEventId}
-            collapsed={!!collapsed["week"]}
-            onToggle={() => toggleGroup("week")}
-            onSelect={handleSelect}
-          />
-        </>
-      )}
+      <SectionGroup
+        label="Today"
+        events={todayEvents}
+        selectedId={selectedEventId}
+        collapsed={!!collapsed["today"]}
+        onToggle={() => toggleGroup("today")}
+        onSelect={handleSelect}
+      />
+      <SectionGroup
+        label="Tomorrow"
+        events={tomorrowEvents}
+        selectedId={selectedEventId}
+        collapsed={!!collapsed["tomorrow"]}
+        onToggle={() => toggleGroup("tomorrow")}
+        onSelect={handleSelect}
+      />
+      <SectionGroup
+        label="This Week"
+        events={weekEvents}
+        selectedId={selectedEventId}
+        collapsed={!!collapsed["week"]}
+        onToggle={() => toggleGroup("week")}
+        onSelect={handleSelect}
+      />
     </div>
   );
 }

@@ -1,14 +1,47 @@
 use crate::db::{self, Database};
+use crate::extraction::scheduler::PipelineScheduler;
 use crate::llm::client::LLMClient;
 use crate::models;
 use crate::workspace;
+use rusqlite::Connection;
 use serde::Serialize;
 use std::fs;
 use std::io::{self, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex as StdMutex;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 const SETTING_ACTIVE_PROJECT: &str = "ui.active_project_id";
+
+/// task_002 / ADR-006：将 enqueue 抽象成最小 trait，使 `import_files_core`
+/// 可以脱离 Tauri AppHandle 接受单测。
+///
+/// 生产实现 `AppHandleEnqueue` 仍委托 `PipelineScheduler::enqueue(&app, id)`，
+/// 该静态方法会自取 `app.state::<Database>()` 的锁写 `pipeline_tasks` /
+/// `extracted_content`；因此核心函数**必须**在调用 `enqueue` 时**不**持有
+/// DB MutexGuard（否则死锁）。
+pub trait EnqueueScheduler {
+    fn enqueue(&self, asset_id: &str) -> Result<String, String>;
+}
+
+/// 生产路径：透传到 `PipelineScheduler::enqueue`。
+pub struct AppHandleEnqueue<'a> {
+    pub app: &'a AppHandle,
+}
+
+impl<'a> EnqueueScheduler for AppHandleEnqueue<'a> {
+    fn enqueue(&self, asset_id: &str) -> Result<String, String> {
+        PipelineScheduler::enqueue(self.app, asset_id)
+    }
+}
+
+/// 核心导入产物：除 `ImportDropSummary` 外，回吐每个 asset 的 AI 分类输入，
+/// 由命令薄包装层决定是否触发后台 AI 旁路。该结构仅进程内传递，不序列化给前端。
+pub struct ImportCoreOutput {
+    pub summary: ImportDropSummary,
+    /// 与 `summary.created` 一一对应：每条 (asset, classify_input)。
+    pub ai_pending_jobs: Vec<(models::Asset, String)>,
+}
 
 /// 单条拖入导入结果（扁平序列化：与 `Asset` 字段同层，便于前端沿用 `Asset` 类型）
 #[derive(Debug, Clone, Serialize)]
@@ -25,13 +58,17 @@ pub struct ImportDropCreated {
     pub ai_pending: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportDropSummary {
     pub created: Vec<ImportDropCreated>,
     pub failures: Vec<String>,
     /// 本次导入落库的项目名称（便于悬浮窗提示用户去主页哪里找）
     pub import_project_name: String,
+    /// ADR-006：已落库但入队失败的 asset_id 列表。
+    /// 不删 asset 行 / 不删源文件，由 M5 重试或 M9 离线自愈兜底；UI 可据此提示。
+    #[serde(default)]
+    pub failures_to_enqueue: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -391,6 +428,16 @@ async fn apply_llm_classify_to_asset(
         }
     }
 
+    // R6（防止标签传播多处实现）：原件被 AI 打标后，同步标签到该原件已有的 markdown 衍生件
+    // 失败仅 warn，不阻断主流程（AC-3）
+    if let Err(e) = db::tag::sync_tags_to_canonical_derivatives(&conn, &asset.id) {
+        log::warn!(
+            "AI 打标后同步标签到衍生件失败 asset_id={}: {}",
+            asset.id,
+            e
+        );
+    }
+
     Ok(())
 }
 
@@ -443,61 +490,128 @@ fn path_asset_meta(path: &Path) -> (String, String, String) {
         .map(str::to_lowercase)
         .unwrap_or_default();
 
-    let (asset_type, mime) = match ext.as_str() {
-        "jpg" | "jpeg" => ("image", "image/jpeg"),
-        "png" => ("image", "image/png"),
-        "gif" => ("image", "image/gif"),
-        "webp" => ("image", "image/webp"),
-        "heic" | "heif" => ("image", "image/heic"),
-        "pdf" => ("pdf", "application/pdf"),
-        "mp3" => ("audio_clip", "audio/mpeg"),
-        "wav" => ("audio_clip", "audio/wav"),
-        "m4a" | "aac" => ("audio_clip", "audio/mp4"),
-        "flac" => ("audio_clip", "audio/flac"),
-        "md" | "markdown" => ("markdown", "text/markdown"),
-        "txt" => ("markdown", "text/plain"),
-        _ => ("other", "application/octet-stream"),
+    // task_H2 修订：扩展名映射补全 + infer crate magic bytes 兜底。
+    // 与 sync.rs::guess_mime_by_extension 字面对齐（避免 drift；未来抽公共 util）。
+    let (asset_type, mime_owned): (&str, String) = match ext.as_str() {
+        // 图片
+        "jpg" | "jpeg" => ("image", "image/jpeg".into()),
+        "png" => ("image", "image/png".into()),
+        "gif" => ("image", "image/gif".into()),
+        "webp" => ("image", "image/webp".into()),
+        "heic" | "heif" => ("image", "image/heic".into()),
+        "bmp" => ("image", "image/bmp".into()),
+        "tiff" | "tif" => ("image", "image/tiff".into()),
+        "svg" => ("image", "image/svg+xml".into()),
+        // 文档
+        "pdf" => ("pdf", "application/pdf".into()),
+        "rtf" => ("docx", "application/rtf".into()),
+        "html" | "htm" => ("html", "text/html".into()),
+        "xml" => ("other", "application/xml".into()),
+        "json" => ("other", "application/json".into()),
+        // 表格 / 数据
+        "csv" => ("csv", "text/csv".into()),
+        "tsv" => ("csv", "text/tab-separated-values".into()),
+        // Office
+        "docx" => (
+            "docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document".into(),
+        ),
+        "xlsx" => (
+            "xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".into(),
+        ),
+        "pptx" => (
+            "pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation".into(),
+        ),
+        "doc" => ("docx", "application/msword".into()),
+        "xls" => ("xlsx", "application/vnd.ms-excel".into()),
+        "ppt" => ("pptx", "application/vnd.ms-powerpoint".into()),
+        // 电子书 / 归档
+        "epub" => ("epub", "application/epub+zip".into()),
+        "zip" => ("other", "application/zip".into()),
+        // 音频（task_010 路由到 iflytek）
+        "mp3" => ("audio_clip", "audio/mpeg".into()),
+        "wav" => ("audio_clip", "audio/wav".into()),
+        "m4a" | "aac" => ("audio_clip", "audio/mp4".into()),
+        "flac" => ("audio_clip", "audio/flac".into()),
+        "ogg" => ("audio_clip", "audio/ogg".into()),
+        "opus" => ("audio_clip", "audio/opus".into()),
+        // 视频（task_010 reject）
+        "mp4" => ("video", "video/mp4".into()),
+        "mov" => ("video", "video/quicktime".into()),
+        "webm" => ("video", "video/webm".into()),
+        "mkv" => ("video", "video/x-matroska".into()),
+        // 文本
+        "md" | "markdown" => ("markdown", "text/markdown".into()),
+        "txt" => ("markdown", "text/plain".into()),
+        // 未知扩展名：用 infer crate 读 magic bytes 嗅探
+        _ => {
+            if let Ok(Some(kind)) = infer::get_from_path(path) {
+                let m = kind.mime_type().to_string();
+                let t = if m.starts_with("image/") {
+                    "image"
+                } else if m.starts_with("audio/") {
+                    "audio_clip"
+                } else if m.starts_with("video/") {
+                    "video"
+                } else if m == "application/pdf" {
+                    "pdf"
+                } else if m == "application/epub+zip" {
+                    "epub"
+                } else {
+                    "other"
+                };
+                (t, m)
+            } else {
+                ("other", "application/octet-stream".into())
+            }
+        }
     };
 
-    (asset_type.to_string(), mime.to_string(), name)
+    (asset_type.to_string(), mime_owned, name)
 }
 
-#[tauri::command]
-pub async fn import_drop_paths(
-    app: AppHandle,
-    database: State<'_, Database>,
+/// task_002 / ADR-006：原子导入核心 — 不持 `AppHandle`，便于单测。
+///
+/// 流程（**对每个 path 顺序执行**）：
+///   1. `fs::copy` 源文件到 `project_workspace_dir/{asset_id}_{safe_name}`
+///   2. `db::asset::insert(root)`（短锁；失败 → 计入 `failures`，物理文件保留为孤儿）
+///   3. `scheduler.enqueue(asset_id)`
+///        - 成功 → `created.push(...)`；
+///        - 失败 → **不**删 asset 行 / **不**删源文件（ADR-006）；
+///          asset_id 记入 `failures_to_enqueue`；asset 仍计入 `created`
+///          （前端可见 offline 占位）。
+///
+/// 注：`enqueue` 调用期间**绝不**持有 DB MutexGuard，避免与 scheduler 内部
+/// 重新锁 `Database` 产生死锁。`import_files_core` 本身是同步函数，没有 await，
+/// 因此天然不会跨 await 持锁。
+pub fn import_files_core<S: EnqueueScheduler>(
+    conn_mutex: &StdMutex<Connection>,
+    scheduler: &S,
+    project_id: &str,
     paths: Vec<String>,
-) -> Result<ImportDropSummary, String> {
-    if paths.is_empty() {
-        return Ok(ImportDropSummary {
-            created: vec![],
-            failures: vec![],
-            import_project_name: String::new(),
-        });
-    }
+) -> Result<ImportCoreOutput, String> {
+    let mut created: Vec<ImportDropCreated> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+    let mut failures_to_enqueue: Vec<String> = Vec::new();
+    let mut ai_pending_jobs: Vec<(models::Asset, String)> = Vec::new();
 
-    // 注意：该命令是 async，不能在 await 期间持有 SQLite 的 MutexGuard
-    let (project_id, import_project_name) = {
-        let conn = database
-            .conn
-            .lock()
-            .map_err(|e| format!("数据库锁获取失败: {e}"))?;
-        let pid = ensure_import_project_id(&conn)?;
-        let pname = db::project::get_by_id(&conn, &pid)?
-            .map(|p| p.name)
-            .unwrap_or_else(|| "当前项目".to_string());
-        (pid, pname)
-    };
-
-    let mut created = Vec::new();
-    let mut failures = Vec::new();
     let now = chrono::Utc::now().to_rfc3339();
 
-    let project_asset_dir = workspace::ensure_project_workspace(&project_id)?;
+    let project_asset_dir = workspace::ensure_project_workspace(project_id)?;
     log::info!(
         "拖入工作区目录: {}",
         project_asset_dir.display()
     );
+
+    // 一次性读出 AI 是否可用（短锁）
+    let ai_pending_global = {
+        let conn = conn_mutex
+            .lock()
+            .map_err(|e| format!("数据库锁获取失败: {e}"))?;
+        LLMClient::is_available_in_conn(&conn)
+    };
 
     for path_str in paths {
         let path = Path::new(&path_str);
@@ -520,7 +634,6 @@ pub async fn import_drop_paths(
 
         let (asset_type, mime_type, name) = path_asset_meta(path);
         let file_size = meta.len() as i64;
-
         let asset_id = uuid::Uuid::new_v4().to_string();
 
         let safe_name = name
@@ -540,7 +653,7 @@ pub async fn import_drop_paths(
 
         let asset = models::Asset {
             id: asset_id.clone(),
-            project_id: project_id.clone(),
+            project_id: project_id.to_string(),
             asset_type,
             name: name.clone(),
             original_name: name,
@@ -552,11 +665,12 @@ pub async fn import_drop_paths(
             source_type: "dropzone_drag".to_string(),
             source_data: Some(path_str.clone()),
             is_starred: false,
+            ..Default::default()
         };
 
+        // —— 短锁块：仅做 asset 行 INSERT；guard drop 后再 enqueue —— //
         {
-            let conn = database
-                .conn
+            let conn = conn_mutex
                 .lock()
                 .map_err(|e| format!("数据库锁获取失败: {e}"))?;
             if let Err(e) = db::asset::insert(&conn, &asset) {
@@ -565,7 +679,20 @@ pub async fn import_drop_paths(
             }
         }
 
-        // 轻量 AI 识别：优先读取文本内容（限制大小），否则仅用文件名 + 类型做分类
+        // ADR-006：失败的 enqueue 不让 asset 行消失，也不删源文件。
+        match scheduler.enqueue(&asset.id) {
+            Ok(_) => {}
+            Err(e) => {
+                log::warn!(
+                    "dropzone 入队失败 asset={}: {} — ADR-006 保留 asset 行与源文件",
+                    asset.id,
+                    e
+                );
+                failures_to_enqueue.push(asset.id.clone());
+            }
+        }
+
+        // 轻量 AI 识别：构造分类输入（不阻塞，仅准备数据，命令层决定是否 spawn）
         let mut classify_input = format!(
             "文件名：{}\nMIME：{}\n资产类型：{}\n",
             asset.name, asset.mime_type, asset.asset_type
@@ -573,7 +700,6 @@ pub async fn import_drop_paths(
         if asset.mime_type.starts_with("text/") || asset.asset_type == "markdown" {
             let mut buf = String::new();
             if let Ok(mut f) = fs::File::open(&dest_path) {
-                // 最多读取 32KB，避免大文件拖慢与超 token
                 let mut raw = vec![0u8; 32 * 1024];
                 if let Ok(n) = f.read(&mut raw) {
                     raw.truncate(n);
@@ -586,36 +712,77 @@ pub async fn import_drop_paths(
             }
         }
 
-        // AI 分类改为后台异步：此处立即返回，避免阻塞悬浮窗 IPC
-        let ai_pending = {
-            let conn = database
-                .conn
-                .lock()
-                .map_err(|e| format!("数据库锁获取失败: {e}"))?;
-            LLMClient::is_available_in_conn(&conn)
-        };
-
-        if ai_pending {
-            spawn_dropzone_ai_job(&app, asset.clone(), classify_input);
+        if ai_pending_global {
+            ai_pending_jobs.push((asset.clone(), classify_input));
         }
 
         created.push(ImportDropCreated {
             asset,
             ai_classified: false,
-            ai_note: if ai_pending {
+            ai_note: if ai_pending_global {
                 None
             } else {
                 Some("未配置 AI，已跳过自动分类".to_string())
             },
-            ai_pending,
+            ai_pending: ai_pending_global,
         });
     }
 
     let summary = ImportDropSummary {
         created,
         failures,
-        import_project_name: import_project_name.clone(),
+        import_project_name: String::new(), // 由命令层填充（核心层不查 project 表）
+        failures_to_enqueue,
     };
+
+    Ok(ImportCoreOutput {
+        summary,
+        ai_pending_jobs,
+    })
+}
+
+#[tauri::command]
+pub async fn import_drop_paths(
+    app: AppHandle,
+    database: State<'_, Database>,
+    paths: Vec<String>,
+) -> Result<ImportDropSummary, String> {
+    if paths.is_empty() {
+        return Ok(ImportDropSummary::default());
+    }
+
+    // 注意：该命令是 async，不能在 await 期间持有 SQLite 的 MutexGuard
+    let (project_id, import_project_name) = {
+        let conn = database
+            .conn
+            .lock()
+            .map_err(|e| format!("数据库锁获取失败: {e}"))?;
+        let pid = ensure_import_project_id(&conn)?;
+        let pname = db::project::get_by_id(&conn, &pid)?
+            .map(|p| p.name)
+            .unwrap_or_else(|| "当前项目".to_string());
+        (pid, pname)
+    };
+
+    let scheduler_adapter = AppHandleEnqueue { app: &app };
+    let core_out = import_files_core(&database.conn, &scheduler_adapter, &project_id, paths)?;
+
+    // 若 created 非空且至少有一个成功入队，则唤醒调度循环
+    let any_enqueued = core_out.summary.created.len() > core_out.summary.failures_to_enqueue.len();
+
+    // AI 旁路：在命令层 spawn（核心层不 spawn，避免裸 tokio::spawn 扩散）
+    for (asset, classify_input) in core_out.ai_pending_jobs {
+        spawn_dropzone_ai_job(&app, asset, classify_input);
+    }
+
+    // W3-1：循环结束统一唤醒一次调度循环（start 自身幂等）
+    if any_enqueued {
+        let scheduler = app.state::<PipelineScheduler>();
+        scheduler.start(app.clone());
+    }
+
+    let mut summary = core_out.summary;
+    summary.import_project_name = import_project_name.clone();
 
     if let Err(e) = app.emit(
         "notecapt/import-drop-finished",
@@ -677,5 +844,255 @@ pub async fn toggle_dropzone_window(app: AppHandle) -> Result<bool, String> {
     } else {
         create_dropzone_window(app).await?;
         Ok(true)
+    }
+}
+
+// =====================================================================
+// task_002 / ADR-006 — `import_files_core` 的单元测试
+//
+// 设计要点：
+// - 不依赖 Tauri AppHandle / State / 网络；通过 `EnqueueScheduler` trait 注入
+//   一个测试用假 scheduler（happy = 仅记录 + 同步写一行 pipeline_tasks；
+//   failure = 永远返回 Err）。
+// - 使用项目工作区真实路径 `~/Downloads/NoteCaptWorkPlace/<uuid>/`，
+//   project_id 用一次性 UUID 隔离；测试结束 best-effort 清理该子目录。
+// - DB 用临时目录里的 SQLite 文件（不是 :memory:，因为 `Database::open`
+//   只接受文件路径并会跑 migration）。
+// =====================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use crate::models::{Library, Project};
+    use rusqlite::params;
+    use std::sync::Mutex as StdMutex;
+    use tempfile::TempDir;
+
+    /// 永远成功的 scheduler；副作用：往 `pipeline_tasks` 写一条 status='queued' 的行，
+    /// 用以模拟真实 `PipelineScheduler::enqueue` 的可观察后果（满足 AC-4）。
+    struct OkScheduler<'a> {
+        conn_mutex: &'a StdMutex<rusqlite::Connection>,
+        enqueued: StdMutex<Vec<String>>,
+    }
+
+    impl<'a> EnqueueScheduler for OkScheduler<'a> {
+        fn enqueue(&self, asset_id: &str) -> Result<String, String> {
+            // 短锁：模拟真实 scheduler 在自己的事务里写 extracted_content + pipeline_tasks
+            let conn = self
+                .conn_mutex
+                .lock()
+                .map_err(|e| format!("锁失败: {e}"))?;
+            let task_id = uuid::Uuid::new_v4().to_string();
+            let ec_id = uuid::Uuid::new_v4().to_string();
+            let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            conn.execute(
+                "INSERT INTO extracted_content (id, asset_id, status, retry_count, quality_level, extractor_type, created_at, updated_at)
+                 VALUES (?1, ?2, 'pending', 0, 0, '', ?3, ?3)",
+                params![ec_id, asset_id, now],
+            )
+            .map_err(|e| format!("插入 extracted_content 失败: {e}"))?;
+            conn.execute(
+                "INSERT INTO pipeline_tasks (id, asset_id, task_type, status, retry_count, max_retries, priority, created_at)
+                 VALUES (?1, ?2, 'extract', 'queued', 0, 3, 100, ?3)",
+                params![task_id, asset_id, now],
+            )
+            .map_err(|e| format!("插入 pipeline_tasks 失败: {e}"))?;
+            drop(conn);
+            self.enqueued
+                .lock()
+                .unwrap()
+                .push(asset_id.to_string());
+            Ok(task_id)
+        }
+    }
+
+    /// 永远失败的 scheduler，用于 AC-3。
+    struct FailingScheduler {
+        called: StdMutex<Vec<String>>,
+    }
+    impl EnqueueScheduler for FailingScheduler {
+        fn enqueue(&self, asset_id: &str) -> Result<String, String> {
+            self.called
+                .lock()
+                .unwrap()
+                .push(asset_id.to_string());
+            Err("boom: simulated enqueue failure".to_string())
+        }
+    }
+
+    /// 在临时目录上开一个迁移到位的 DB，写入一条 library + 一条 project，返回 (db, project_id, _guard)。
+    fn fresh_db_with_project() -> (Database, String, TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let db_path = tmp.path().join("notecapt_test.db");
+        let db = Database::open(&db_path).expect("open db");
+
+        let library_id = uuid::Uuid::new_v4().to_string();
+        let project_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        {
+            let conn = db.conn.lock().unwrap();
+            let lib = Library {
+                id: library_id.clone(),
+                name: "测试库".into(),
+                root_path: String::new(),
+                created_at: now.clone(),
+            };
+            crate::db::library::insert(&conn, &lib).expect("insert lib");
+            let proj = Project {
+                id: project_id.clone(),
+                library_id,
+                name: "测试项目".into(),
+                description: String::new(),
+                cover_asset_id: None,
+                source_type: "test".into(),
+                source_data: None,
+                is_pinned: false,
+                is_archived: false,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+                total_duration: None,
+                asset_count: 0,
+                word_count: 0,
+                imported_at: None,
+            };
+            crate::db::project::insert(&conn, &proj).expect("insert project");
+        }
+        (db, project_id, tmp)
+    }
+
+    /// 在临时目录写两个源文件供 import_files_core 消费。返回 (临时目录 guard, vec<path str>)。
+    fn write_two_source_files() -> (TempDir, Vec<String>) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let p1 = dir.path().join("alpha.txt");
+        let p2 = dir.path().join("beta.md");
+        std::fs::write(&p1, b"hello-alpha").expect("write 1");
+        std::fs::write(&p2, b"# beta").expect("write 2");
+        (
+            dir,
+            vec![
+                p1.to_string_lossy().to_string(),
+                p2.to_string_lossy().to_string(),
+            ],
+        )
+    }
+
+    /// 测试结束时尽力清理 workspace 子目录（不影响其他测试与用户数据）。
+    fn cleanup_workspace(project_id: &str) {
+        if let Ok(dir) = workspace::project_workspace_dir(project_id) {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn happy_path_inserts_root_and_enqueues() {
+        crate::testing::init_test_logger();
+
+        let (db, project_id, _db_tmp) = fresh_db_with_project();
+        let (_src_tmp, paths) = write_two_source_files();
+
+        let scheduler = OkScheduler {
+            conn_mutex: &db.conn,
+            enqueued: StdMutex::new(Vec::new()),
+        };
+
+        let out = import_files_core(&db.conn, &scheduler, &project_id, paths)
+            .expect("core 调用应成功");
+
+        // 1) 两条 created，零失败
+        assert_eq!(out.summary.created.len(), 2, "应有 2 条 created");
+        assert!(out.summary.failures.is_empty(), "不应有 failures");
+        assert!(
+            out.summary.failures_to_enqueue.is_empty(),
+            "happy path 不应有 failures_to_enqueue"
+        );
+
+        // 2) DB 中两条 root asset（source_asset_id IS NULL）
+        let conn = db.conn.lock().unwrap();
+        let root_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM assets WHERE project_id = ?1 AND source_asset_id IS NULL",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .expect("count roots");
+        assert_eq!(root_count, 2, "应有 2 条 root asset");
+
+        // 3) FakeScheduler 写出了 2 条 pipeline_tasks status='queued'
+        let queued_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pipeline_tasks WHERE status='queued' AND asset_id IN
+                 (SELECT id FROM assets WHERE project_id = ?1)",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .expect("count tasks");
+        assert_eq!(queued_count, 2, "应有 2 条 queued pipeline_tasks");
+        drop(conn);
+
+        // 4) scheduler 内部记录了两个 asset_id
+        let enqueued = scheduler.enqueued.lock().unwrap();
+        assert_eq!(enqueued.len(), 2);
+
+        cleanup_workspace(&project_id);
+    }
+
+    #[test]
+    fn enqueue_failure_keeps_asset() {
+        crate::testing::init_test_logger();
+
+        let (db, project_id, _db_tmp) = fresh_db_with_project();
+        let (_src_tmp, paths) = write_two_source_files();
+
+        let scheduler = FailingScheduler {
+            called: StdMutex::new(Vec::new()),
+        };
+
+        let out = import_files_core(&db.conn, &scheduler, &project_id, paths.clone())
+            .expect("核心调用不应整体失败（enqueue 失败仅记 warn）");
+
+        // 1) 仍 2 条 created（asset 行被保留）
+        assert_eq!(out.summary.created.len(), 2);
+        assert!(out.summary.failures.is_empty());
+
+        // 2) 两条都进 failures_to_enqueue
+        assert_eq!(out.summary.failures_to_enqueue.len(), 2, "ADR-006: 两条都应记入");
+
+        // 3) DB 中两条 root asset 仍存在
+        let conn = db.conn.lock().unwrap();
+        let asset_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM assets WHERE project_id = ?1",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .expect("count assets");
+        assert_eq!(asset_count, 2, "asset 行不应被回滚");
+
+        // 4) 没有任何 pipeline_tasks 被写入（FailingScheduler 不会写）
+        let queued_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pipeline_tasks WHERE asset_id IN
+                 (SELECT id FROM assets WHERE project_id = ?1)",
+                params![project_id],
+                |r| r.get(0),
+            )
+            .expect("count tasks");
+        assert_eq!(queued_count, 0);
+
+        // 5) 物理源文件（落到 workspace 的副本）应仍存在
+        for c in &out.summary.created {
+            let p = Path::new(&c.asset.file_path);
+            assert!(
+                p.exists(),
+                "ADR-006: workspace 内源文件应保留: {}",
+                p.display()
+            );
+        }
+        drop(conn);
+
+        // 6) scheduler.enqueue 确被调用两次（顺序无关）
+        assert_eq!(scheduler.called.lock().unwrap().len(), 2);
+
+        cleanup_workspace(&project_id);
     }
 }

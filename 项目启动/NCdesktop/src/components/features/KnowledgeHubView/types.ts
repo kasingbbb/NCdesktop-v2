@@ -9,7 +9,7 @@ export const HUB_STEPS = ["assets", "concepts", "library", "skills"] as const;
 
 export type HubStep = (typeof HUB_STEPS)[number];
 
-export const DEFAULT_HUB_STEP: HubStep = "assets";
+export const DEFAULT_HUB_STEP: HubStep = "concepts";
 
 export function isHubStep(value: unknown): value is HubStep {
   return typeof value === "string" && (HUB_STEPS as readonly string[]).includes(value);

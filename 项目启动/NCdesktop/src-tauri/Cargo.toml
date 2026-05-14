@@ -33,12 +33,21 @@ tauri-plugin-log = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-drag = "2"
 tokio = { version = "1.50.0", features = ["time"] }
+tokio-util = { version = "0.7", features = ["io"] }
 hmac = "0.12"
 sha1 = "0.10"
+sha2 = "0.10"
 base64 = "0.22"
 quick-xml = "0.37"
 zip = "2"
 pdf-extract = "0.7"
+# task_009：扫描型 PDF 结构性嗅探（XObject + Font 引用判定，禁止启发式 / H6）。
+# 纯 Rust，无 C 依赖；与 pdf-extract 间接传递依赖同版本，避免重复编译。
+lopdf = "0.34"
+# task_H2_mime_sniff_fix：扩展名缺失/不匹配时，按 magic bytes 嗅探 MIME 类型。
+# 纯 Rust，无 C 依赖；仅读文件前 ~256 字节，性能可忽略。
+# 版本对齐 tauri 间接依赖（infer 0.19），避免重复编译。
+infer = "0.19"
 
 [dev-dependencies]
 env_logger = "0.11"

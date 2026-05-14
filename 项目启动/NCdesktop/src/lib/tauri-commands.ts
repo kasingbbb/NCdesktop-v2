@@ -17,6 +17,19 @@ import type {
   WorkspaceFolderEntry,
 } from "../types";
 import type { AIAnalysis } from "../types/asset";
+import type {
+  ConceptWithStats,
+  ConceptDetail,
+  ConceptViewpoint,
+  ConceptExtension,
+  ExtractionProgress as ConceptExtractionProgress,
+} from "../types/knowledge";
+import type {
+  KnowledgeUnit,
+  KnowledgeUnitSummary,
+  UnderstandingSnapshot,
+  CreateSnapshot,
+} from "../types/knowledge-units";
 
 // ── Library ────────────────────────────────────────
 
@@ -77,6 +90,14 @@ export async function revealProjectWorkspaceFolder(
   return invoke<void>("reveal_project_workspace_folder", { projectId, relativePath });
 }
 
+/**
+ * task_011 AC-1：在 Finder（macOS）中显示给定源文件（高亮选中）。
+ * 入参为绝对路径字符串；后端会校验路径非空 + 存在。
+ */
+export async function revealSourceFile(sourcePath: string): Promise<void> {
+  return invoke<void>("reveal_source_file", { sourcePath });
+}
+
 // ── Asset ──────────────────────────────────────────
 
 export async function getAssets(projectId: string): Promise<Asset[]> {
@@ -109,8 +130,29 @@ export async function createAsset(params: {
   return invoke<Asset>("create_asset", params);
 }
 
+/**
+ * @deprecated 工作区 rename 已迁移到 {@link renameAsset}（ADR-007，命令以 asset_id 为唯一目标）。
+ *  本函数仍保留供"非 rename"的整行 Asset 更新场景（is_starred 切换等同名兼容）使用。
+ *  rename 调用者必须切换到 `renameAsset`，否则 markdown 衍生件 .name 不会双写。
+ */
 export async function updateAsset(asset: Asset): Promise<void> {
   return invoke<void>("update_asset", { asset });
+}
+
+/**
+ * 工作区 rename 唯一入口（ADR-007）。
+ * 后端会双写 root.name + markdown 衍生件 .name；不动磁盘文件。
+ * 入参为 asset_id（接受 root.id 或 markdown derivative.id）+ 新展示名。
+ * 返回最新的 WorkspaceAssetView，前端可就地 patch 不必重 fetch 整个列表。
+ */
+export async function renameAsset(
+  assetId: string,
+  newDisplayName: string
+): Promise<import("../types/workspaceAsset").WorkspaceAssetView> {
+  return invoke<import("../types/workspaceAsset").WorkspaceAssetView>("rename_asset", {
+    assetId,
+    newDisplayName,
+  });
 }
 
 export async function deleteAsset(id: string): Promise<void> {
@@ -532,4 +574,200 @@ export async function llmProbe(): Promise<ClassifyResult> {
 
 export async function llmEnhanceExport(markdown: string): Promise<string> {
   return invoke<string>("llm_enhance_export", { markdown });
+}
+
+// ── 知识关联：概念 ─────────────────────────────────────
+
+export async function getConcepts(libraryId: string): Promise<ConceptWithStats[]> {
+  return invoke<ConceptWithStats[]>("get_concepts", { libraryId });
+}
+
+export async function getConceptDetail(conceptId: string): Promise<ConceptDetail | null> {
+  return invoke<ConceptDetail | null>("get_concept_detail", { conceptId });
+}
+
+export async function updateConcept(
+  conceptId: string,
+  name?: string,
+  definition?: string
+): Promise<void> {
+  return invoke("update_concept", { conceptId, name, definition });
+}
+
+export async function deleteConcept(conceptId: string): Promise<void> {
+  return invoke("delete_concept", { conceptId });
+}
+
+export async function extractConceptsForLibrary(
+  libraryId: string,
+  force: boolean
+): Promise<ConceptExtractionProgress> {
+  return invoke<ConceptExtractionProgress>("extract_concepts_for_library", {
+    libraryId,
+    force,
+  });
+}
+
+export async function synthesizeViewpoints(
+  conceptId: string
+): Promise<ConceptViewpoint[]> {
+  return invoke<ConceptViewpoint[]>("synthesize_viewpoints", { conceptId });
+}
+
+export async function generateExtensions(
+  conceptId: string
+): Promise<ConceptExtension[]> {
+  return invoke<ConceptExtension[]>("generate_extensions", { conceptId });
+}
+
+/** 知识合成管道进度事件载荷（`notecapt/knowledge-synthesis-progress`） */
+export interface SynthesisProgress {
+  libraryId: string;
+  stage: string;
+  groupsFound: number;
+  unitsWritten: number;
+  error?: string | null;
+}
+
+// ── 知识单元（KU） ─────────────────────────────────────
+
+export async function synthesizeKnowledgeUnits(
+  libraryId: string,
+  force: boolean
+): Promise<KnowledgeUnitSummary[]> {
+  return invoke<KnowledgeUnitSummary[]>("synthesize_knowledge_units", {
+    libraryId,
+    force,
+  });
+}
+
+export async function kuGetList(libraryId: string): Promise<KnowledgeUnitSummary[]> {
+  return invoke<KnowledgeUnitSummary[]>("ku_get_list", { libraryId });
+}
+
+export async function kuGetDetail(id: string): Promise<KnowledgeUnit | null> {
+  return invoke<KnowledgeUnit | null>("ku_get_detail", { id });
+}
+
+export async function kuGetSnapshots(
+  knowledgeUnitId: string
+): Promise<UnderstandingSnapshot[]> {
+  return invoke<UnderstandingSnapshot[]>("ku_get_snapshots", { knowledgeUnitId });
+}
+
+export async function kuCreateSnapshot(snapshot: CreateSnapshot): Promise<void> {
+  return invoke("ku_create_snapshot", { snapshot });
+}
+
+export async function kuUpdateStatus(id: string, status: string): Promise<void> {
+  return invoke("ku_update_status", { id, status });
+}
+
+export async function kuUpdateNote(id: string, userNote: string): Promise<void> {
+  return invoke("ku_update_note", { id, userNote });
+}
+
+export async function kuUpdateMirrorFeedback(
+  id: string,
+  feedbackJson: string
+): Promise<void> {
+  return invoke("ku_update_mirror_feedback", { id, feedbackJson });
+}
+
+export async function kuUpdateReviewSchedule(
+  id: string,
+  nextReviewDue: string | null,
+  depthLevel: number
+): Promise<void> {
+  return invoke("ku_update_review_schedule", { id, nextReviewDue, depthLevel });
+}
+
+export async function kuDelete(id: string): Promise<void> {
+  return invoke("ku_delete", { id });
+}
+
+export async function kuGetDueForReview(
+  libraryId: string,
+  limit?: number
+): Promise<KnowledgeUnitSummary[]> {
+  return invoke<KnowledgeUnitSummary[]>("ku_get_due_for_review", {
+    libraryId,
+    limit,
+  });
+}
+
+export interface ConversionMetaRow {
+  id: string;
+  sourceAssetId: string;
+  derivedAssetId: string | null;
+  converterName: string;
+  converterVersion: string;
+  sourceMime: string;
+  sourceHash: string;
+  qualityLevel: number;
+  fallbackUsed: boolean;
+  errorClass: string | null;
+  conversionMs: number | null;
+  convertedAt: string;
+}
+
+export async function getConversionMeta(assetId: string): Promise<ConversionMetaRow[]> {
+  return invoke<ConversionMetaRow[]>("get_conversion_meta", { assetId });
+}
+
+// ── 提取重试（task_011）────────────────────────────────────────────────────
+// 后端 `retrigger_extraction`：从 failed/extracted 任一态干净重跑；
+// 命中 queued/extracting 时安全 noop（后端幂等）。
+export async function retriggerExtraction(assetId: string): Promise<void> {
+  return invoke<void>("retrigger_extraction", { assetId });
+}
+
+// task_006 AC-1（M5）：工作区"重试转换"命令唯一入口。
+// 本函数是后端 `retry_asset_conversion` 的薄包装，内部转发到
+// `retrigger_extraction`，提供与 asset 视角对齐的命名。幂等性由后端三道
+// 护栏保证（详见 `commands::extraction::retry_asset_conversion`）。
+export async function retryAssetConversion(assetId: string): Promise<void> {
+  return invoke<void>("retry_asset_conversion", { assetId });
+}
+
+// ── Outbound payload（task_005_dev_m4）─────────────────────────────────────
+// 为多选 done 态资产准备 outbound .md 投影；非 done / 混合 / rendition 缺失等
+// 错误以 JSON 字符串返回（OutboundError 联合类型），由调用方解析后 toast。
+
+export interface OutboundEntry {
+  assetId: string;
+  /** 缓存目录内 .md 文件的绝对路径 */
+  path: string;
+  /** sanitize 后的文件名（含 .md 后缀） */
+  displayName: string;
+}
+
+export type OutboundError =
+  | { kind: "emptyInput"; message: string }
+  | { kind: "stateNotDone"; assetId: string; state: string; message: string }
+  | { kind: "mixedStates"; offending: string[]; message: string }
+  | { kind: "renditionMissing"; assetId: string; message: string }
+  | { kind: "assetNotFound"; assetId: string; message: string }
+  | { kind: "ioFailed"; assetId: string | null; detail: string; message: string };
+
+/**
+ * 准备 outbound .md 投影。错误以 JSON 字符串通过 Promise reject 抛出，
+ * 调用方应 `try { ... } catch (e) { parseOutboundError(e) }`。
+ */
+export async function prepareOutboundPayload(assetIds: string[]): Promise<OutboundEntry[]> {
+  return invoke<OutboundEntry[]>("prepare_outbound_payload", { assetIds });
+}
+
+/** 把 Tauri 错误（可能是 OutboundError JSON 字符串）解析为结构化错误；解析失败回退为 null。 */
+export function parseOutboundError(raw: unknown): OutboundError | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && typeof parsed.kind === "string") {
+      return parsed as OutboundError;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }

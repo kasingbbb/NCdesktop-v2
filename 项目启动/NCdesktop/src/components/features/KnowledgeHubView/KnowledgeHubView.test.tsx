@@ -45,9 +45,9 @@ describe("KnowledgeHubView", () => {
     setHash("");
   });
 
-  it("默认渲染 assets step（无 hash）", () => {
+  it("默认渲染 concepts step（v1.3 task_007 KH-01：DEFAULT_HUB_STEP 改为 concepts）", () => {
     render(<KnowledgeHubView libraryId="lib-1" />);
-    expect(screen.getByTestId("step-assets")).toBeInTheDocument();
+    expect(screen.getByTestId("step-concepts")).toBeInTheDocument();
   });
 
   it("hash=#/knowledge-hub/library → 渲染 library step", () => {
@@ -92,5 +92,34 @@ describe("KnowledgeHubView", () => {
     setHash("#/knowledge-hub/skills");
     render(<KnowledgeHubView libraryId={null} />);
     expect(screen.getByTestId("step-skills").textContent).toBe("SKILLS:null");
+  });
+
+  // ── v1.3 task_007 KH-02~05：链条形态 + counts ────────────────────────────
+
+  it("KH-02：step 之间渲染 chevron `›`（aria-hidden）", () => {
+    setHash("#/knowledge-hub/concepts");
+    render(<KnowledgeHubView libraryId="lib-1" />);
+    // 4 个 step → 3 个 chevron
+    const chevrons = screen
+      .getAllByText("›", { selector: "[aria-hidden='true']" });
+    expect(chevrons.length).toBe(3);
+  });
+
+  it("KH-05：每个 step button 上有 data-step 属性", () => {
+    setHash("#/knowledge-hub/concepts");
+    render(<KnowledgeHubView libraryId="lib-1" />);
+    expect(screen.getByRole("tab", { name: /素材/ }).getAttribute("data-step")).toBe("assets");
+    expect(screen.getByRole("tab", { name: /概念/ }).getAttribute("data-step")).toBe("concepts");
+    expect(screen.getByRole("tab", { name: /知识库/ }).getAttribute("data-step")).toBe("library");
+    expect(screen.getByRole("tab", { name: /技能/ }).getAttribute("data-step")).toBe("skills");
+  });
+
+  it("KH-04：count === 0 时仅显示 step label，不渲染数字 span", () => {
+    setHash("#/knowledge-hub/concepts");
+    // 四个 store 都是默认空，length 全 0
+    render(<KnowledgeHubView libraryId="lib-1" />);
+    const conceptsTab = screen.getByRole("tab", { name: /概念/ });
+    // .step-count span 不应出现
+    expect(conceptsTab.querySelector(".step-count")).toBeNull();
   });
 });

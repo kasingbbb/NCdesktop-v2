@@ -1,0 +1,61 @@
+# 主仓 lint：阻断真实样本（pdf/docx/pptx/xlsx/epub/html/image）以明文形式进入主仓。
+# AC-7：任何路径下不得存在这些后缀的文件（fixtures/ 例外除外，见 ALLOWLIST_PREFIXES）。
+name: Forbid Raw Samples In Main Repo
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for forbidden binary sample extensions
+        run: |
+          set -euo pipefail
+          # 允许的"已知合成 fixtures"前缀（如有）。当前为空 — 一旦需要保留合成 fixtures，再列。
+          # 例：ALLOWLIST_PREFIXES=("NCdesktop/fixtures/synthetic/")
+          ALLOWLIST_PREFIXES=()
+
+          FORBIDDEN_REGEX='\.(pdf|docx|pptx|xlsx|epub)$'
+          # 注：html / 图像格式风险较低（多为静态资源），如需扩展请在此追加。
+          # 如要严格：FORBIDDEN_REGEX='\.(pdf|docx|pptx|xlsx|epub|html|htm|jpg|jpeg|png)$'
+
+          HITS=$(git ls-files | grep -Ei "$FORBIDDEN_REGEX" || true)
+
+          if [ -z "$HITS" ]; then
+            echo "::notice::No forbidden binary samples found."
+            exit 0
+          fi
+
+          # 过滤 allowlist
+          FILTERED=""
+          while IFS= read -r f; do
+            keep=true
+            for prefix in "${ALLOWLIST_PREFIXES[@]:-}"; do
+              [ -z "$prefix" ] && continue
+              case "$f" in
+                "$prefix"*) keep=false; break;;
+              esac
+            done
+            if $keep; then
+              FILTERED="${FILTERED}${f}"$'\n'
+            fi
+          done <<< "$HITS"
+
+          FILTERED="$(printf '%s' "$FILTERED" | sed '/^$/d')"
+
+          if [ -n "$FILTERED" ]; then
+            echo "::error::Forbidden binary sample files detected in main repo:"
+            echo "$FILTERED"
+            echo ""
+            echo "Real samples MUST live in samples-private (encrypted). See docs/sample_desensitization_sop.md."
+            exit 1
+          fi
+
+          echo "::notice::All hits matched allowlist."

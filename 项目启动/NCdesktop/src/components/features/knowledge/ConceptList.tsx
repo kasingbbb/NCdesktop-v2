@@ -6,9 +6,16 @@
  * - 加载骨架屏
  * - 空状态提示
  *
+ * v1.3 task_009 IN-04（fix 回填）：每条概念右侧加 "合并" disabled 占位按钮。
+ *   实际合并 modal 业务逻辑推 v1.4；本期仅 UI 占位 + data-merge-id 便于 e2e。
+ *
+ * 注意：原外层是 `<button>`，无法嵌套 `<button>`。改为 `<div role="button" tabIndex={0}>`
+ * 并显式处理键盘事件（Enter / Space），保持 a11y 一致。
+ *
  * 约束（宪章 A1/A2）：named export，CSS 变量
  */
 
+import { Pin } from "lucide-react";
 import type { ConceptWithStats } from "../../../types/knowledge";
 
 interface Props {
@@ -53,37 +60,42 @@ export function ConceptList({ concepts, selectedId, isLoading, onSelect }: Props
       {concepts.map((concept) => {
         const isActive = selectedId === concept.id;
         return (
-          <button
+          <div
             key={concept.id}
-            type="button"
+            role="button"
+            tabIndex={0}
             onClick={() => onSelect(concept.id)}
-            className="w-full flex items-start gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] text-left transition-colors"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect(concept.id);
+              }
+            }}
+            className="w-full flex items-start gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] text-left transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
             style={{
               background: isActive
                 ? "var(--sidebar-active-bg, var(--surface-tertiary))"
                 : "transparent",
             }}
           >
-            {/* 图钉图标 */}
             <span
               className="flex-shrink-0 mt-0.5"
               style={{ color: isActive ? "var(--brand-navy)" : "var(--text-tertiary)" }}
             >
-              📌
+              <Pin size={13} aria-hidden />
             </span>
 
             <div className="min-w-0 flex-1">
-              {/* 概念名 */}
               <p
-                className="text-[var(--text-sm)] font-medium truncate leading-5"
+                className="text-[var(--text-md)] font-medium truncate leading-5"
                 style={{
                   color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
                 }}
+                title={concept.name}
               >
                 {concept.name}
               </p>
 
-              {/* 统计数据 */}
               <p
                 className="text-[10px] mt-0.5"
                 style={{ color: "var(--text-tertiary)" }}
@@ -97,7 +109,6 @@ export function ConceptList({ concepts, selectedId, isLoading, onSelect }: Props
               </p>
             </div>
 
-            {/* 用户编辑标记 */}
             {concept.userEdited && (
               <span
                 className="flex-shrink-0 text-[9px] px-1 py-px rounded mt-0.5"
@@ -110,7 +121,24 @@ export function ConceptList({ concepts, selectedId, isLoading, onSelect }: Props
                 已编辑
               </span>
             )}
-          </button>
+
+            {/* v1.3 task_009 IN-04：合并按钮 disabled 占位（v1.4 接入合并 modal） */}
+            <button
+              type="button"
+              disabled
+              data-merge-id={concept.id}
+              title="v1.4 合并 modal 待开"
+              onClick={(e) => e.stopPropagation()}
+              className="flex-shrink-0 text-[10px] px-[var(--space-2)] py-px rounded-[var(--radius-sm)] cursor-not-allowed disabled:opacity-50"
+              style={{
+                color: "var(--text-tertiary)",
+                border: "1px solid var(--border-primary)",
+                background: "var(--surface-primary)",
+              }}
+            >
+              合并
+            </button>
+          </div>
         );
       })}
     </div>

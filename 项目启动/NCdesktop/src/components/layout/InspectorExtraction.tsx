@@ -21,6 +21,7 @@ function extractorLabel(name: string): string {
   const map: Record<string, string> = {
     markitdown: "MarkItDown",
     materialized_markdown: "物化 Markdown",
+    source_markdown: "源 Markdown",
     pdf_text: "内置 PDF 文本提取",
     pdf_scan_ocr: "扫描 PDF OCR",
     docx: "内置 DOCX 提取",
@@ -28,23 +29,55 @@ function extractorLabel(name: string): string {
     text: "文本提取",
     vision_ocr: "图片 OCR",
     audio_asr: "音频转写",
+    builtin: "内置提取器",
   };
   return map[name] ?? name;
 }
 
+function errorClassLabel(cls: string | null | undefined): string {
+  const map: Record<string, string> = {
+    file_not_found: "找不到文件",
+    permission_denied: "权限不足",
+    unsupported_format: "格式不支持",
+    markitdown_not_installed: "未安装 MarkItDown",
+    python_unavailable: "Python 不可用",
+    empty_output: "转换输出为空",
+    timeout: "转换超时",
+    conversion_error: "转换出错",
+  };
+  return cls && map[cls] ? map[cls] : "提取失败";
+}
+
+function formatConversionMs(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return "—";
+  if (ms > 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${ms} ms`;
+}
+
 export function InspectorExtraction({ asset }: InspectorExtractionProps) {
-  const { contentCache, statusCache, fetchExtractedContent, retryExtraction } =
-    useExtractionStore();
+  const {
+    contentCache,
+    statusCache,
+    conversionMetaCache,
+    fetchExtractedContent,
+    fetchConversionMeta,
+    retryExtraction,
+  } = useExtractionStore();
 
   const [expanded, setExpanded] = useState(true);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     void fetchExtractedContent(asset.id);
-  }, [asset.id, fetchExtractedContent]);
+    // 失败态/重试场景下 fetchExtractedContent 内部可能因无内容跳过 meta 拉取，
+    // 这里兜底再触发一次（store 内部去重无副作用，失败仅 warn）。
+    void fetchConversionMeta(asset.id);
+  }, [asset.id, fetchExtractedContent, fetchConversionMeta]);
 
   const content = contentCache[asset.id];
   const status = (statusCache[asset.id] ?? content?.status ?? "pending") as ExtractionStatus;
+  // 最新一行转换元数据（后端按 converted_at DESC 返回）
+  const latestMeta = conversionMetaCache[asset.id]?.[0];
 
   const handleCopy = useCallback(async () => {
     const text = content?.rawText ?? content?.structuredMd;
@@ -124,7 +157,7 @@ export function InspectorExtraction({ asset }: InspectorExtractionProps) {
           {status === "failed" && (
             <div className="space-y-2">
               <p className="text-[var(--text-xs)]" style={{ color: "#FF3B30" }}>
-                {content?.errorMessage ?? "提取失败"}
+                {errorClassLabel(latestMeta?.errorClass)}
               </p>
               <button
                 type="button"
@@ -173,6 +206,29 @@ export function InspectorExtraction({ asset }: InspectorExtractionProps) {
                 >
                   质量：{qualityLabel(content.qualityLevel)}（{content.qualityLevel}） · 转换来源：{extractorLabel(content.extractorType)}
                 </p>
+              )}
+              {latestMeta && (
+                <div className="space-y-1">
+                  <p
+                    className="text-[10px]"
+                    style={{ color: "var(--text-tertiary)" }}
+                  >
+                    转换信息：{extractorLabel(latestMeta.converterName)} {latestMeta.converterVersion}
+                    {" · "}
+                    {formatConversionMs(latestMeta.conversionMs)}
+                  </p>
+                  {latestMeta.fallbackUsed && (
+                    <p
+                      className="text-[10px]"
+                      style={{
+                        // 优先使用全局 token，未定义时回退到 #FF9500（待后续提取到 globals.css --color-warning）
+                        color: "var(--color-warning, #FF9500)",
+                      }}
+                    >
+                      已自动回退到 {extractorLabel(latestMeta.converterName)}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           )}

@@ -23,14 +23,14 @@ describe("parseHubStep", () => {
   it("解析 #/knowledge-hub/concepts → 'concepts'", () => {
     expect(parseHubStep("#/knowledge-hub/concepts")).toBe("concepts");
   });
-  it("空 hash → 默认 'assets'", () => {
-    expect(parseHubStep("")).toBe("assets");
+  it("空 hash → 默认 'concepts'（v1.3 task_007 KH-01：DEFAULT_HUB_STEP 改为 concepts）", () => {
+    expect(parseHubStep("")).toBe("concepts");
   });
-  it("非 hub hash → 默认 'assets'", () => {
-    expect(parseHubStep("#/foo")).toBe("assets");
+  it("非 hub hash → 默认 'concepts'", () => {
+    expect(parseHubStep("#/foo")).toBe("concepts");
   });
-  it("未知 step → 降级 'assets'", () => {
-    expect(parseHubStep("#/knowledge-hub/bogus")).toBe("assets");
+  it("未知 step → 降级 'concepts'", () => {
+    expect(parseHubStep("#/knowledge-hub/bogus")).toBe("concepts");
   });
 });
 
@@ -47,15 +47,15 @@ describe("migrateLegacyHash", () => {
       applySidebarSection: true,
     });
   });
-  it("#/knowledge-hub (无 step) → 补 assets", () => {
+  it("#/knowledge-hub (无 step) → 补 concepts（v1.3 task_007 KH-01）", () => {
     expect(migrateLegacyHash("#/knowledge-hub")).toEqual({
-      nextHash: "#/knowledge-hub/assets",
+      nextHash: "#/knowledge-hub/concepts",
       applySidebarSection: false,
     });
   });
-  it("#/knowledge-hub/<bad> → 降级到 assets + warnReason", () => {
+  it("#/knowledge-hub/<bad> → 降级到 concepts + warnReason", () => {
     const r = migrateLegacyHash("#/knowledge-hub/bogus");
-    expect(r?.nextHash).toBe("#/knowledge-hub/assets");
+    expect(r?.nextHash).toBe("#/knowledge-hub/concepts");
     expect(r?.applySidebarSection).toBe(false);
     expect(r?.warnReason).toMatch(/bogus/);
   });
@@ -82,10 +82,10 @@ describe("useHubHashRoute", () => {
     expect(result.current.step).toBe("concepts");
   });
 
-  it("默认值（hash 为空）→ 'assets'", () => {
+  it("默认值（hash 为空）→ 'concepts'（v1.3 task_007 KH-01）", () => {
     setHash("");
     const { result } = renderHook(() => useHubHashRoute());
-    expect(result.current.step).toBe("assets");
+    expect(result.current.step).toBe("concepts");
   });
 
   it("setStep 触发 pushState 并更新 step", () => {

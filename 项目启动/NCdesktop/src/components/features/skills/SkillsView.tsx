@@ -274,7 +274,7 @@ function SkillDetail({ skill, libraryId, onProgressRefresh, onSkillUpdated }: De
           {skill.status === "verified" ? (
             <div className="skv-verified-badge">
               <CheckCircle2 size={16} />
-              <span>技能已验证 🎉</span>
+              <span>技能已验证</span>
               {skill.verifiedAt && (
                 <span className="skv-verified-date">
                   {new Date(skill.verifiedAt).toLocaleDateString("zh-CN")}

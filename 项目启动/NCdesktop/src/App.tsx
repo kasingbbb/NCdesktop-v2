@@ -103,6 +103,7 @@ export default function App() {
 
     let unlistenImport: (() => void) | undefined;
     let unlistenAI: (() => void) | undefined;
+    let unlistenConverted: (() => void) | undefined;
     let cancelled = false;
 
     void listen<ImportDropFinishedPayload>("notecapt/import-drop-finished", (event) => {
@@ -120,10 +121,22 @@ export default function App() {
       if (!cancelled) unlistenAI = fn;
     });
 
+    // 文件转换 v1.1：后端物化衍生 .md 后发出此事件，触发当前项目列表刷新，
+    // 用户无需手动按钮即可看到「转换自 xxx」的新 Asset。
+    void listen<{ sourceAssetId: string; derivedAssetId: string; projectId: string }>(
+      "notecapt/asset-converted",
+      (event) => {
+        handleRefresh(event.payload.projectId);
+      },
+    ).then((fn) => {
+      if (!cancelled) unlistenConverted = fn;
+    });
+
     return () => {
       cancelled = true;
       unlistenImport?.();
       unlistenAI?.();
+      unlistenConverted?.();
     };
   }, [isDropzone]);
 

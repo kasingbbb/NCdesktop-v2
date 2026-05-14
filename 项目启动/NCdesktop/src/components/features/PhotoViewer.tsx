@@ -31,9 +31,9 @@ export function PhotoViewer({ url }: PhotoViewerProps) {
         </button>
       </div>
 
-      <div 
-        className="transition-transform duration-200 ease-out origin-center"
-        style={{ transform: `scale(${scale})` }}
+      <div
+        className="origin-center"
+        style={{ transform: `scale(${scale})`, transition: "transform var(--duration-fast) var(--ease-out-quart)" }}
       >
         <img 
           src={url} 

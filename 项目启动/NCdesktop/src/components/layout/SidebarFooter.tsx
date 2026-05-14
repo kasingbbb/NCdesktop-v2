@@ -1,4 +1,5 @@
-import { Settings, CreditCard, Box } from "lucide-react";
+import { Settings, Box } from "lucide-react";
+import { SidebarItem } from "./SidebarItem";
 import { useSyncStore } from "../../stores/syncStore";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -11,31 +12,45 @@ export function SidebarFooter({ onSettingsOpen }: SidebarFooterProps) {
 
   return (
     <div
-      className="px-[8px] py-[10px]"
-      style={{ borderTop: "1px solid var(--sidebar-divider)" }}
+      data-testid="sidebar-footer"
+      className="px-[var(--space-3)] py-[var(--space-3)] border-t flex items-center gap-[var(--space-2)]"
+      style={{ borderColor: "var(--border-primary)" }}
     >
-      <div
-        className="flex items-center gap-[8px] px-[8px] py-[6px] rounded-[var(--radius-md)] cursor-pointer transition-all"
-        style={{ color: "var(--sidebar-text)" }}
-        onClick={onSettingsOpen}
-        onMouseEnter={(e) => {
-          (e.currentTarget as HTMLElement).style.background = "var(--sidebar-hover-bg)";
-        }}
-        onMouseLeave={(e) => {
-          (e.currentTarget as HTMLElement).style.background = "transparent";
-        }}
-      >
-        <div
-          className="w-[26px] h-[26px] rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0"
-          style={{ background: "linear-gradient(135deg, #3b82f6, #6366f1)" }}
-        >
-          U
-        </div>
-        <div className="min-w-0">
-          <div className="text-[12px] font-medium" style={{ color: "var(--sidebar-text)" }}>用户</div>
-          <div className="text-[10px]" style={{ color: "var(--sidebar-text-dim)" }}>设置</div>
-        </div>
+      <div className="flex-1 min-w-0">
+        <SidebarItem
+          icon={<Settings size={16} />}
+          label="设置"
+          onClick={onSettingsOpen}
+        />
+        <SidebarItem
+          icon={<Box size={16} />}
+          label="悬浮导入"
+          onClick={() => {
+            invoke("toggle_dropzone_window").catch(console.error);
+          }}
+        />
       </div>
+      {isTFCardConnected ? (
+        <span
+          data-testid="sidebar-footer-tf-badge"
+          className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded font-semibold"
+          style={{
+            background: "var(--surface-tertiary)",
+            color: "var(--text-secondary)",
+          }}
+          title="TF 卡已连接"
+        >
+          TF
+        </span>
+      ) : (
+        <span
+          data-testid="sidebar-footer-tf-dot"
+          className="w-1.5 h-1.5 rounded-full shrink-0"
+          style={{ background: "var(--text-tertiary)" }}
+          title="未插入 TF 卡"
+          aria-label="未插入 TF 卡"
+        />
+      )}
     </div>
   );
 }

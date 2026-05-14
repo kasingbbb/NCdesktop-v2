@@ -7,13 +7,13 @@ export function DropzoneProcessing() {
 
   return (
     <div
-      className="glass-panel flex flex-col items-center justify-center cursor-wait relative overflow-hidden"
+      className="flex flex-col items-center justify-center cursor-wait relative overflow-hidden"
       style={{
         width: 68,
         height: 68,
         borderRadius: "var(--radius-md)",
-        border: "1px solid var(--border-primary)",
-        background: "var(--surface-primary)",
+        border: "1px solid #2d3a50",
+        background: "#1e2940",
       }}
     >
       <div
@@ -21,13 +21,13 @@ export function DropzoneProcessing() {
         style={{
           width: 26,
           height: 26,
-          borderColor: "var(--text-secondary)",
+          borderColor: "#3b82f6",
           borderTopColor: "transparent",
         }}
       />
       <span
         className="text-[8px] font-medium text-center max-w-[62px] line-clamp-2 absolute bottom-1.5 z-10 leading-tight px-0.5"
-        style={{ color: "var(--brand-navy)" }}
+        style={{ color: "#93c5fd" }}
         title={label}
       >
         {label}

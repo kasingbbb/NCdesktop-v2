@@ -1,0 +1,124 @@
+# Notarize DMG — task_005_notarize_staple_gatekeeper / ADR-005
+#
+# Manually-triggered workflow that takes a pre-built, pre-signed DMG artifact
+# (produced by scripts/build-macos-dmg.sh on a self-hosted macOS runner or
+# uploaded from a release machine) and submits it to Apple's notary service
+# via the App Store Connect API-key flow.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   NOTARY_KEY_ID        — 10-char API key id from App Store Connect Keys tab
+#   NOTARY_ISSUER_ID     — issuer UUID from the same page
+#   NOTARY_KEY_P8_BASE64 — base64-encoded contents of the .p8 file
+#                           (encode locally with: base64 -i AuthKey_XXXX.p8 | pbcopy)
+#
+# Security:
+#   - The decoded .p8 lives in $RUNNER_TEMP for the duration of the job only.
+#   - chmod 600 enforced before any tool reads it.
+#   - `if: always()` cleanup step shreds the .p8 even if notarytool failed.
+#   - No `echo` / `cat` of the secret anywhere; logs print "<redacted>".
+#   - `set +x` boundaries are baked into scripts/notarize.sh itself.
+name: Notarize DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      dmg_artifact_name:
+        description: "Name of the uploaded DMG artifact to notarize"
+        required: true
+        default: "NoteCapt-embedded-runtime"
+
+jobs:
+  notarize:
+    # Must run on macOS — xcrun notarytool / stapler / spctl are macOS-only.
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (for scripts/notarize.sh)
+        uses: actions/checkout@v4
+
+      - name: Sanity check notary secrets presence
+        env:
+          KEY_ID:       ${{ secrets.NOTARY_KEY_ID }}
+          ISSUER:       ${{ secrets.NOTARY_ISSUER_ID }}
+          KEY_B64:      ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -z "$KEY_ID"  ] && missing="$missing NOTARY_KEY_ID"
+          [ -z "$ISSUER"  ] && missing="$missing NOTARY_ISSUER_ID"
+          [ -z "$KEY_B64" ] && missing="$missing NOTARY_KEY_P8_BASE64"
+          if [ -n "$missing" ]; then
+            echo "::error::missing required secrets:$missing"
+            exit 1
+          fi
+          # Only print lengths, never the values themselves.
+          echo "KEY_ID length:  ${#KEY_ID}"
+          echo "ISSUER length:  ${#ISSUER}"
+          echo "KEY_B64 length: ${#KEY_B64}"
+
+      - name: Download DMG artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.dmg_artifact_name }}
+          path: ${{ runner.temp }}/dmg
+
+      - name: Locate DMG
+        id: locate
+        run: |
+          set -euo pipefail
+          DMG_PATH="$(find "$RUNNER_TEMP/dmg" -maxdepth 3 -name '*.dmg' -type f | head -n1)"
+          if [ -z "$DMG_PATH" ]; then
+            echo "::error::no .dmg found under $RUNNER_TEMP/dmg"
+            exit 1
+          fi
+          echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_OUTPUT"
+          echo "Located: $DMG_PATH"
+
+      - name: Decode .p8 to ephemeral file
+        id: decode
+        env:
+          KEY_B64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          # AC-5: never echo $KEY_B64; pipe directly to base64 -d.
+          # `set +x` here is belt-and-suspenders — `set -x` is not enabled by
+          # default in GH Actions bash steps, but a future-proofing guard.
+          set +x
+          P8="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s' "$KEY_B64" | base64 -d > "$P8"
+          chmod 600 "$P8"
+          # Don't print the path's contents — just confirm size > 0.
+          if [ ! -s "$P8" ]; then
+            echo "::error::decoded .p8 is empty"
+            exit 1
+          fi
+          echo "P8_PATH=$P8" >> "$GITHUB_OUTPUT"
+
+      - name: Run notarize.sh
+        env:
+          NOTARY_KEY_ID:      ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID:   ${{ secrets.NOTARY_ISSUER_ID }}
+          NOTARY_KEY_P8_PATH: ${{ steps.decode.outputs.P8_PATH }}
+        run: |
+          set -euo pipefail
+          bash scripts/notarize.sh "${{ steps.locate.outputs.DMG_PATH }}"
+
+      - name: Upload notarized + stapled DMG
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.dmg_artifact_name }}-notarized
+          path: ${{ steps.locate.outputs.DMG_PATH }}
+
+      - name: Shred .p8 (always)
+        if: always()
+        run: |
+          # AC-5: ensure the private key is removed from the runner whether the
+          # notarize step succeeded, failed, or was cancelled. GH-hosted
+          # macos-14 runners are ephemeral but explicit deletion is hygiene.
+          P8="${{ steps.decode.outputs.P8_PATH }}"
+          if [ -n "$P8" ] && [ -f "$P8" ]; then
+            # `rm -P` overwrites before unlinking on macOS.
+            rm -P -f "$P8" || rm -f "$P8"
+            echo ".p8 removed."
+          fi
