@@ -11,6 +11,7 @@ pub mod knowledge;
 pub mod knowledge_understanding;
 pub mod co_occurrence;
 pub mod concepts_extraction_log;
+pub mod knowledge_units;
 
 use rusqlite::Connection;
 use std::path::Path;

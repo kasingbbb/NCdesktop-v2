@@ -228,6 +228,18 @@ export function Toolbar({ onSearchOpen }: ToolbarProps) {
             <List size={13} />
           </button>
         </div>
+        {/* Inspector 切换（无论是否在项目内都可用，避免关闭后无入口重开） */}
+        <button
+          type="button"
+          className="w-[30px] h-[30px] flex items-center justify-center rounded-[var(--radius-md)] transition-colors"
+          title="Inspector"
+          onClick={toggleInspector}
+          style={{ color: inspectorOpen ? "var(--text-primary)" : "var(--text-tertiary)" }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = "var(--surface-tertiary)"; }}
+          onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+        >
+          <PanelRight size={14} />
+        </button>
       </div>
     </div>
   );

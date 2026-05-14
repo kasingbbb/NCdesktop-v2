@@ -17,6 +17,19 @@ import type {
   WorkspaceFolderEntry,
 } from "../types";
 import type { AIAnalysis } from "../types/asset";
+import type {
+  ConceptWithStats,
+  ConceptDetail,
+  ConceptViewpoint,
+  ConceptExtension,
+  ExtractionProgress as ConceptExtractionProgress,
+} from "../types/knowledge";
+import type {
+  KnowledgeUnit,
+  KnowledgeUnitSummary,
+  UnderstandingSnapshot,
+  CreateSnapshot,
+} from "../types/knowledge-units";
 
 // ── Library ────────────────────────────────────────
 
@@ -516,4 +529,124 @@ export async function llmProbe(): Promise<ClassifyResult> {
 
 export async function llmEnhanceExport(markdown: string): Promise<string> {
   return invoke<string>("llm_enhance_export", { markdown });
+}
+
+// ── 知识关联：概念 ─────────────────────────────────────
+
+export async function getConcepts(libraryId: string): Promise<ConceptWithStats[]> {
+  return invoke<ConceptWithStats[]>("get_concepts", { libraryId });
+}
+
+export async function getConceptDetail(conceptId: string): Promise<ConceptDetail | null> {
+  return invoke<ConceptDetail | null>("get_concept_detail", { conceptId });
+}
+
+export async function updateConcept(
+  conceptId: string,
+  name?: string,
+  definition?: string
+): Promise<void> {
+  return invoke("update_concept", { conceptId, name, definition });
+}
+
+export async function deleteConcept(conceptId: string): Promise<void> {
+  return invoke("delete_concept", { conceptId });
+}
+
+export async function extractConceptsForLibrary(
+  libraryId: string,
+  force: boolean
+): Promise<ConceptExtractionProgress> {
+  return invoke<ConceptExtractionProgress>("extract_concepts_for_library", {
+    libraryId,
+    force,
+  });
+}
+
+export async function synthesizeViewpoints(
+  conceptId: string
+): Promise<ConceptViewpoint[]> {
+  return invoke<ConceptViewpoint[]>("synthesize_viewpoints", { conceptId });
+}
+
+export async function generateExtensions(
+  conceptId: string
+): Promise<ConceptExtension[]> {
+  return invoke<ConceptExtension[]>("generate_extensions", { conceptId });
+}
+
+/** 知识合成管道进度事件载荷（`notecapt/knowledge-synthesis-progress`） */
+export interface SynthesisProgress {
+  libraryId: string;
+  stage: string;
+  groupsFound: number;
+  unitsWritten: number;
+  error?: string | null;
+}
+
+// ── 知识单元（KU） ─────────────────────────────────────
+
+export async function synthesizeKnowledgeUnits(
+  libraryId: string,
+  force: boolean
+): Promise<KnowledgeUnitSummary[]> {
+  return invoke<KnowledgeUnitSummary[]>("synthesize_knowledge_units", {
+    libraryId,
+    force,
+  });
+}
+
+export async function kuGetList(libraryId: string): Promise<KnowledgeUnitSummary[]> {
+  return invoke<KnowledgeUnitSummary[]>("ku_get_list", { libraryId });
+}
+
+export async function kuGetDetail(id: string): Promise<KnowledgeUnit | null> {
+  return invoke<KnowledgeUnit | null>("ku_get_detail", { id });
+}
+
+export async function kuGetSnapshots(
+  knowledgeUnitId: string
+): Promise<UnderstandingSnapshot[]> {
+  return invoke<UnderstandingSnapshot[]>("ku_get_snapshots", { knowledgeUnitId });
+}
+
+export async function kuCreateSnapshot(snapshot: CreateSnapshot): Promise<void> {
+  return invoke("ku_create_snapshot", { snapshot });
+}
+
+export async function kuUpdateStatus(id: string, status: string): Promise<void> {
+  return invoke("ku_update_status", { id, status });
+}
+
+export async function kuUpdateNote(id: string, userNote: string): Promise<void> {
+  return invoke("ku_update_note", { id, userNote });
+}
+
+export async function kuUpdateMirrorFeedback(
+  id: string,
+  feedbackJson: string
+): Promise<void> {
+  return invoke("ku_update_mirror_feedback", { id, feedbackJson });
+}
+
+export async function kuUpdateReviewSchedule(
+  id: string,
+  nextReviewDue: string | null,
+  depthLevel: number
+): Promise<void> {
+  return invoke("ku_update_review_schedule", { id, nextReviewDue, depthLevel });
+}
+
+export async function kuDelete(id: string): Promise<void> {
+  return invoke("ku_delete", { id });
+}
+
+export async function kuGetDueForReview(
+  libraryId: string,
+  limit?: number
+): Promise<KnowledgeUnitSummary[]> {
+  return invoke<KnowledgeUnitSummary[]>("ku_get_due_for_review", {
+    libraryId,
+    limit,
+  });
 }
