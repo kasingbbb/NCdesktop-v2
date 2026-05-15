@@ -50,6 +50,45 @@ pub fn run_migrations(conn: &Connection) -> Result<(), String> {
         v14_legacy_unverified_backfill(conn)?;
     }
 
+    if current_version < 15 {
+        v15_user_custom_prompt(conn)?;
+    }
+
+    Ok(())
+}
+
+/// V15（custom_prompt_v1 / task_002）：用户自定义 Prompt 表。
+///
+/// 设计依据：Architect output.md § 5.1 / ADR-002。
+/// - 表 `user_custom_prompt`：`module` 作主键（4 个白名单值：tagging / para / concept / aggregation）；
+///   `is_custom` 用 INTEGER 0/1 避免 SQLite BOOLEAN 兼容性问题；
+///   `builtin_version` 为 R3 预留（内置 Prompt 升级后用户版本"落后"提示），MVP 仅写入不读取；
+///   `updated_at` 默认 `datetime('now')`，由 DB 层 upsert 时显式覆写为 UTC RFC3339。
+/// - 不写入任何默认行：`is_custom = 0`/记录缺失等价于"未自定义"，运行时回退到内置默认 Prompt。
+/// - 索引 `idx_user_custom_prompt_is_custom` 用于未来按"是否已自定义"过滤；MVP 仅 4 行的小表
+///   建索引看似过度，但 schema 一致性比微优化重要（避免 P2 二次 migration 加索引）。
+///
+/// 幂等：DDL 全部 `IF NOT EXISTS`，`PRAGMA user_version` 写在末尾。即便在 user_version=14
+/// 但表已手动建过的残缺路径（R7），本迁移也仅 no-op 推版本。
+fn v15_user_custom_prompt(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS user_custom_prompt (
+            module          TEXT PRIMARY KEY,
+            prompt_text     TEXT NOT NULL,
+            is_custom       INTEGER NOT NULL DEFAULT 0,
+            builtin_version TEXT NOT NULL DEFAULT '1.0',
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_custom_prompt_is_custom
+            ON user_custom_prompt(is_custom);
+
+        PRAGMA user_version = 15;
+        ",
+    )
+    .map_err(|e| format!("V15 迁移失败（user_custom_prompt 表/索引）: {e}"))?;
+
+    log::info!("数据库迁移 V15 完成：user_custom_prompt 表 + is_custom 索引");
     Ok(())
 }
 
@@ -780,7 +819,7 @@ mod tests {
     }
 
     /// 模拟生产残留：user_version=10 但 conversion_meta 缺失。
-    /// V11 必须真正补建表 + 三索引并推到 11。
+    /// V11 必须真正补建表 + 三索引；后续 V12~V15 把 user_version 推到 15。
     #[test]
     fn v11_repairs_user_version_10_missing_conversion_meta() {
         let conn = Connection::open_in_memory().unwrap();
@@ -800,13 +839,13 @@ mod tests {
         assert!(index_exists(&conn, "idx_cm_source"));
         assert!(index_exists(&conn, "idx_cm_derived"));
         assert!(index_exists(&conn, "idx_cm_converted_at"));
-        // V12+V13+V14 紧随 V11 跑完，把 user_version 推到 14。
-        assert_eq!(user_version(&conn), 14);
+        // V12+V13+V14+V15 紧随 V11 跑完，把 user_version 推到 15。
+        assert_eq!(user_version(&conn), 15);
     }
 
-    /// 全新库：V1..V8 + V11..V14 全跑完。conversion_meta 存在、failure_code 列存在；版本=14。
+    /// 全新库：V1..V8 + V11..V15 全跑完；包含 user_custom_prompt 与索引；版本=15。
     #[test]
-    fn fresh_db_runs_all_migrations_to_v12() {
+    fn fresh_db_runs_all_migrations_to_v15() {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).expect("fresh migrations succeed");
 
@@ -822,21 +861,62 @@ mod tests {
         assert!(index_exists(&conn, "idx_conversion_meta_failure_code"));
         assert!(index_exists(&conn, "idx_conversion_meta_failure_code_legacy"));
         assert!(table_exists(&conn, "concepts"));
-        assert_eq!(user_version(&conn), 14);
+        // V15 新增：user_custom_prompt 表 + is_custom 索引
+        assert!(table_exists(&conn, "user_custom_prompt"));
+        assert!(index_exists(&conn, "idx_user_custom_prompt_is_custom"));
+        // 验证 V15 列形态符合 Architect § 5.1
+        let cols_v15 = list_table_columns(&conn, "user_custom_prompt").unwrap();
+        for required in &[
+            "module",
+            "prompt_text",
+            "is_custom",
+            "builtin_version",
+            "updated_at",
+        ] {
+            assert!(
+                cols_v15.iter().any(|c| c == required),
+                "V15 应包含列 {}",
+                required
+            );
+        }
+        // 默认空表（ADR-002：不写入默认行）
+        let row_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM user_custom_prompt", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(row_count, 0, "V15 不应写入默认行（is_custom=0 等价未自定义）");
+        assert_eq!(user_version(&conn), 15);
     }
 
-    /// 幂等：连续两次调用 run_migrations 不报错，版本仍为 14。
+    /// 幂等：连续两次调用 run_migrations 不报错，版本仍为 15。
     /// 关键覆盖：V12 的 ALTER TABLE 路径在第二次跑时被 PRAGMA table_info 守卫跳过，
-    /// 不会触发 SQLite "duplicate column" 错误。
+    /// 不会触发 SQLite "duplicate column" 错误；V15 的 CREATE TABLE IF NOT EXISTS
+    /// 在二次执行时同样应 no-op 推版本。
     #[test]
     fn run_migrations_is_idempotent() {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).expect("first run succeed");
         run_migrations(&conn).expect("second run should be idempotent");
-        assert_eq!(user_version(&conn), 14);
+        assert_eq!(user_version(&conn), 15);
         assert!(table_exists(&conn, "conversion_meta"));
+        assert!(table_exists(&conn, "user_custom_prompt"));
         let cols = list_table_columns(&conn, "conversion_meta").unwrap();
         assert!(cols.iter().any(|c| c == "failure_code"));
+    }
+
+    /// V15 残缺路径（R7 风险预案）：模拟生产 DB 上 user_version=14
+    /// 但 user_custom_prompt 表已被外部手动建过的场景，V15 仍应幂等 no-op 推版本。
+    #[test]
+    fn v15_idempotent_with_existing_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        // 先跑完 V1..V14
+        run_migrations(&conn).expect("first run");
+        // 模拟"V14 已落地，user_custom_prompt 由外部脚本提前建过"的残缺状态：
+        // 把 user_version 倒退到 14 + 表已存在。
+        conn.execute_batch("PRAGMA user_version = 14;").unwrap();
+        // 二次 run_migrations 触发 V15 dispatcher，CREATE TABLE IF NOT EXISTS 不报错。
+        run_migrations(&conn).expect("v15 should be idempotent against existing table");
+        assert_eq!(user_version(&conn), 15);
+        assert!(table_exists(&conn, "user_custom_prompt"));
     }
 
     /// V12 专项幂等：在已升到 11 的 DB 上额外手动跑一次 V12 函数仍幂等。

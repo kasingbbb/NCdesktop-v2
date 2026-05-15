@@ -2632,6 +2632,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-util",
+ "unicode-normalization",
  "uuid",
  "walkdir",
  "zip",

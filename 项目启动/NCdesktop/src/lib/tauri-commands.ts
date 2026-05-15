@@ -798,3 +798,42 @@ export function parseOutboundError(raw: unknown): OutboundError | null {
     return null;
   }
 }
+
+// ── User Prompt ────────────────────────────────────
+// 用户自定义 Prompt 功能 — 与后端 `commands::user_prompt::{list,get,save,reset}_user_prompt` 对齐。
+// 真相来源：task_001_architect / output.md § 6.2；后端落地见 task_002_dev_backend_data。
+//
+// 命名隔离（ADR-005 / R6）：函数名固定 `*UserPrompt*` 前缀，避免与 PR-4 半成品
+// `stores/promptStore.ts` 中的 `cmd.getPrompt / savePrompt` 字面冲突。
+//
+// 错误：后端返回 `Result<T, String>`，Tauri 会把 `Err` 以 string 形式 reject，
+// 调用方按既有范式 `try { await ... } catch (e) { /* String */ }` 即可。
+import type { PromptInfo, PromptModule } from "../types/user-prompt";
+
+/** 一次性加载全部 4 条 Prompt（按 tagging/para/concept/aggregation 序）。 */
+export async function listUserPrompts(): Promise<PromptInfo[]> {
+  return invoke<PromptInfo[]>("list_user_prompts");
+}
+
+/** 查询单条 Prompt 信息（编辑器进入或刷新时调用）。 */
+export async function getUserPrompt(module: PromptModule): Promise<PromptInfo> {
+  return invoke<PromptInfo>("get_user_prompt", { module });
+}
+
+/**
+ * 保存用户自定义文本；后端经 `validate_module` 白名单 → `ensure_writable` 守卫 →
+ * 16 KiB 字节校验 → `validate_required_placeholders`（task_003 起生效）四道防线。
+ * 任一失败以 string 形式 reject。
+ */
+export async function saveUserPrompt(module: PromptModule, text: string): Promise<void> {
+  return invoke<void>("save_user_prompt", { module, text });
+}
+
+/**
+ * 恢复默认。
+ * - `module = null` ⇒ 全部 4 条恢复默认（删除 user_custom_prompt 表所有行）
+ * - `module = "..."` ⇒ 仅删除该 module 一行（缺行等价"未自定义"，回退到内置默认）
+ */
+export async function resetUserPrompt(module: PromptModule | null): Promise<void> {
+  return invoke<void>("reset_user_prompt", { module });
+}

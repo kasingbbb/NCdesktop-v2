@@ -17,6 +17,12 @@ pub mod conversion_meta;
 // PipelineTaskRow / upsert_extraction_result 等。该文件在仓库中早已存在但 mod.rs
 // 未声明（与 scheduler 自身被注释属同一类"注册缺口"）。
 pub mod extraction;
+// custom_prompt_v1 / task_002：用户自定义 Prompt 数据访问层。
+// migration V15 建表；命令层在 `commands::user_prompt` 中调用本模块。
+pub mod user_prompt;
+// custom_prompt_v1 / task_002：`startup.rs` 依赖 `db::repair`（既有孤儿文件，
+// 与 db::extraction / commands::prompts 属同类"注册缺口"）。仅挂接，不调用。
+pub mod repair;
 
 use rusqlite::Connection;
 use std::path::Path;

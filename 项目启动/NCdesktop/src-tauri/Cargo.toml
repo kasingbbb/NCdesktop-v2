@@ -48,6 +48,10 @@ lopdf = "0.34"
 # 纯 Rust，无 C 依赖；仅读文件前 ~256 字节，性能可忽略。
 # 版本对齐 tauri 间接依赖（infer 0.19），避免重复编译。
 infer = "0.19"
+# custom_prompt_v1 / task_002：`utils::nfc` 模块依赖 UAX#15 NFC 归一化。
+# 仅在挂接既有孤儿模块（`startup` → `utils::nfc`）时需要；版本对齐 Cargo.lock 中
+# 由 idna 等间接拉入的同版本，避免重复编译。
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 env_logger = "0.11"

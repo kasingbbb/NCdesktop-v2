@@ -8,10 +8,12 @@ import {
   Brain,
   Shield,
   ToggleRight,
+  FileText,
 } from "lucide-react";
 import { useSettingsStore } from "../../stores";
 import { useUIStore } from "../../stores/uiStore";
 import { LLMSettingsForm } from "./bridge/LLMSettingsForm";
+import { PromptCustomizationPanel } from "../settings/PromptCustomizationPanel";
 import type { AppSettings } from "../../types";
 
 type SettingsTab =
@@ -21,6 +23,7 @@ type SettingsTab =
   | "dropzone"
   | "audio"
   | "ai"
+  | "prompt"
   | "privacy";
 
 const TABS: Array<{ id: SettingsTab; label: string; icon: typeof Palette }> = [
@@ -30,6 +33,7 @@ const TABS: Array<{ id: SettingsTab; label: string; icon: typeof Palette }> = [
   { id: "dropzone", label: "悬浮窗", icon: MonitorSmartphone },
   { id: "audio", label: "音频", icon: Headphones },
   { id: "ai", label: "AI / LLM", icon: Brain },
+  { id: "prompt", label: "Prompt 自定义", icon: FileText },
   { id: "privacy", label: "隐私", icon: Shield },
 ];
 
@@ -276,6 +280,8 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
             )}
 
             {activeTab === "ai" && <LLMSettingsForm />}
+
+            {activeTab === "prompt" && <PromptCustomizationPanel />}
 
             {activeTab === "privacy" && (
               <div className="space-y-[var(--space-4)]">

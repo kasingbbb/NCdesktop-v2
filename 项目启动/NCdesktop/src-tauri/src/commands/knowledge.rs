@@ -8,6 +8,10 @@ use crate::db::knowledge::{
 use crate::db::Database;
 use crate::llm::chat::{chat_completion, ChatMessage};
 use crate::llm::client::LLMClient;
+use crate::llm::prompt_runtime::{
+    assemble_messages_for_aggregation, assemble_messages_for_concept, inspect_messages_for_log,
+    AggregationVars, ConceptVars,
+};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
@@ -140,17 +144,46 @@ pub async fn extract_concepts_for_library(
             }
         }
 
-        let prompt = build_extraction_prompt(asset_name, project_name, content_snippet);
-        let messages = vec![
-            ChatMessage {
-                role: "system".to_string(),
-                content: "You are a knowledge extraction engine. Given a student's academic document, extract key concepts with precision. Return only valid JSON array.".to_string(),
-            },
-            ChatMessage {
-                role: "user".to_string(),
-                content: prompt,
-            },
-        ];
+        // task_004 AC-2 改造：通过 prompt_runtime::assemble_messages_for_concept 组装
+        // messages，由此真正启用用户自定义 concept Prompt 与输出格式守卫
+        // （ADR-003 Layer A）。旧的 build_extraction_prompt + 内联 messages 已弃用。
+        let assembled = {
+            let conn = db.conn.lock().map_err(|e| format!("数据库锁获取失败: {e}"))?;
+            let msgs = assemble_messages_for_concept(
+                &conn,
+                ConceptVars {
+                    asset_name: asset_name.clone(),
+                    project_name: project_name.clone(),
+                    content: content_snippet.clone(),
+                },
+            );
+            match msgs {
+                Ok(m) => {
+                    let ctx = inspect_messages_for_log(&conn, "concept", &m);
+                    Some((m, ctx))
+                }
+                Err(e) => {
+                    log::warn!(
+                        "概念抽取 messages 组装失败，跳过素材 {}: {}",
+                        asset_id, e
+                    );
+                    None
+                }
+            }
+        };
+
+        let Some((messages, log_ctx)) = assembled else {
+            processed += 1;
+            emit_progress(&app, &library_id, total, processed, concepts_found, "running");
+            continue;
+        };
+
+        log::info!(
+            "LLM call: module={} bytes={} user_overridden={}",
+            log_ctx.module,
+            log_ctx.total_bytes,
+            log_ctx.user_overridden
+        );
 
         // 调用 LLM，解析 JSON
         if let Ok(response) = chat_completion(&client, messages).await {
@@ -269,14 +302,30 @@ pub async fn synthesize_viewpoints(
         return Ok(vec![]);
     }
 
-    let prompt = build_synthesis_prompt(&concept.name, concept.definition.as_deref(), &cases);
-    let messages = vec![
-        ChatMessage {
-            role: "system".to_string(),
-            content: "You are a knowledge synthesis engine. Help students see how the same concept appears across different courses and contexts. Return only valid JSON array.".to_string(),
-        },
-        ChatMessage { role: "user".to_string(), content: prompt },
-    ];
+    // task_004 AC-3 改造：通过 prompt_runtime::assemble_messages_for_aggregation 组装
+    // messages，启用用户自定义 aggregation Prompt 与输出格式守卫。cases 序列化逻辑
+    // 由独立的 build_cases_block helper 处理（与 build_synthesis_prompt 行为一致）。
+    let cases_block = build_cases_block(&cases);
+    let (messages, log_ctx) = {
+        let conn = db.conn.lock().map_err(|e| format!("数据库锁获取失败: {e}"))?;
+        let msgs = assemble_messages_for_aggregation(
+            &conn,
+            AggregationVars {
+                concept_name: concept.name.clone(),
+                definition: concept.definition.clone(),
+                cases_block,
+            },
+        )?;
+        let ctx = inspect_messages_for_log(&conn, "aggregation", &msgs);
+        (msgs, ctx)
+    };
+
+    log::info!(
+        "LLM call: module={} bytes={} user_overridden={}",
+        log_ctx.module,
+        log_ctx.total_bytes,
+        log_ctx.user_overridden
+    );
 
     let response = chat_completion(&client, messages).await?;
     let viewpoints = parse_synthesized_viewpoints(&response, &concept_id)?;
@@ -444,6 +493,33 @@ fn append_source_asset(
 
 // ─── Prompt 构建 ─────────────────────────────────────────────────────────────
 
+/// 把 cases 渲染为多段 "### Context i: title\nexcerpt\n\n" 文本块。
+///
+/// 摘自原 `build_synthesis_prompt` 内循环段，task_004 AC-3 拆出供
+/// `assemble_messages_for_aggregation` 通过 `AggregationVars.cases_block` 注入。
+/// 与原行为字符级一致（含尾随 `\n\n`），用户自定义 `aggregation` Prompt 中
+/// `{cases}` 占位符会被替换为本函数输出。
+fn build_cases_block(cases: &[ConceptCase]) -> String {
+    let mut s = String::new();
+    for (i, case) in cases.iter().enumerate() {
+        s.push_str(&format!(
+            "### Context {}: {}\n{}\n\n",
+            i + 1,
+            case.title,
+            case.excerpt
+        ));
+    }
+    s
+}
+
+/// task_004 AC-2 改造后已弃用：保留只为防止潜在的外部 import 失败，
+/// 实际调用方已切到 `prompt_runtime::assemble_messages_for_concept`。
+/// 若未来彻底移除，请同步删除上游 `prompt_runtime::CONCEPT_DEFAULT` 的
+/// "逐字摘抄自本函数"注释。
+#[allow(dead_code)]
+#[deprecated(
+    note = "task_004 已切换到 prompt_runtime::assemble_messages_for_concept；本函数仅保留用于回退/参考"
+)]
 fn build_extraction_prompt(asset_name: &str, project_name: &str, content: &str) -> String {
     format!(
         "# Document Analysis Request\n\n\
@@ -467,6 +543,13 @@ fn build_extraction_prompt(asset_name: &str, project_name: &str, content: &str) 
     )
 }
 
+/// task_004 AC-3 改造后已弃用：保留只为防止潜在的外部 import 失败，
+/// 实际调用方已切到 `prompt_runtime::assemble_messages_for_aggregation` +
+/// `build_cases_block`。
+#[allow(dead_code)]
+#[deprecated(
+    note = "task_004 已切换到 prompt_runtime::assemble_messages_for_aggregation；本函数仅保留用于回退/参考"
+)]
 fn build_synthesis_prompt(name: &str, definition: Option<&str>, cases: &[ConceptCase]) -> String {
     let mut s = format!(
         "# Viewpoint Synthesis Request\n\n\
@@ -474,14 +557,7 @@ fn build_synthesis_prompt(name: &str, definition: Option<&str>, cases: &[Concept
         ## Appearances across student's documents:\n\n",
         definition.unwrap_or("N/A")
     );
-    for (i, case) in cases.iter().enumerate() {
-        s.push_str(&format!(
-            "### Context {}: {}\n{}\n\n",
-            i + 1,
-            case.title,
-            case.excerpt
-        ));
-    }
+    s.push_str(&build_cases_block(cases));
     s.push_str(
         "## Task\n\
         For each context, synthesize a viewpoint:\n\
@@ -593,4 +669,221 @@ pub fn knowledge_compute_co_occurrence(
 ) -> Result<usize, String> {
     let conn = db.conn.lock().map_err(|e| format!("数据库锁获取失败: {e}"))?;
     crate::db::co_occurrence::compute_co_occurrence(&conn, &library_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::migration::run_migrations;
+    use crate::db::user_prompt as db_user_prompt;
+    use rusqlite::Connection;
+
+    fn fresh_conn() -> Connection {
+        let conn = Connection::open_in_memory().expect("open in memory");
+        run_migrations(&conn).expect("migrate");
+        conn
+    }
+
+    /// 模拟 chat.rs::merge_system_messages 的逻辑——把所有 system 按顺序用 `\n\n`
+    /// 合并成单条字符串。AC-8 字面回归断言通过本函数模拟"传给 Anthropic 的 system 字段"
+    /// 的最终形态，验证 task_003 v2 "LLM 行为零差异"承诺。
+    fn merged_system_field(messages: &[ChatMessage]) -> String {
+        messages
+            .iter()
+            .filter(|m| m.role == "system")
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    // ---- AC-8：concept / aggregation 系统字段字面回归（task_003 选项 A 复刻）----
+
+    /// AC-8：concept 调用产生的 messages 经 chat.rs 合并后，
+    /// system 字段必须**逐字包含** "knowledge extraction engine"
+    /// （来自 CONCEPT_SYSTEM_ADDON，逐字摘抄自原 knowledge.rs:147）。
+    #[test]
+    fn ac8_concept_system_field_literally_contains_knowledge_extraction_engine() {
+        let conn = fresh_conn();
+        let messages = assemble_messages_for_concept(
+            &conn,
+            ConceptVars {
+                asset_name: "操作系统.pdf".into(),
+                project_name: "CS-101".into(),
+                content: "进程是程序的一次执行...".into(),
+            },
+        )
+        .unwrap();
+        let system_field = merged_system_field(&messages);
+        assert!(
+            system_field.contains("knowledge extraction engine"),
+            "AC-8: concept system 字段必须含 'knowledge extraction engine' 字面；实际: {system_field}"
+        );
+    }
+
+    /// AC-8：aggregation 调用产生的 messages 经合并后，
+    /// system 字段必须**逐字包含** "knowledge synthesis engine"
+    /// （来自 AGGREGATION_SYSTEM_ADDON，逐字摘抄自原 knowledge.rs:276）。
+    #[test]
+    fn ac8_aggregation_system_field_literally_contains_knowledge_synthesis_engine() {
+        let conn = fresh_conn();
+        let messages = assemble_messages_for_aggregation(
+            &conn,
+            AggregationVars {
+                concept_name: "认知偏差".into(),
+                definition: Some("一种系统性偏差".into()),
+                cases_block: String::new(),
+            },
+        )
+        .unwrap();
+        let system_field = merged_system_field(&messages);
+        assert!(
+            system_field.contains("knowledge synthesis engine"),
+            "AC-8: aggregation system 字段必须含 'knowledge synthesis engine' 字面；实际: {system_field}"
+        );
+    }
+
+    /// AC-8 补：concept 的自定义模板生效后，system 字段仍含字面 addon。
+    #[test]
+    fn ac8_concept_custom_template_still_injects_system_addon() {
+        let conn = fresh_conn();
+        db_user_prompt::upsert(
+            &conn,
+            "concept",
+            "我的自定义抽取指令：{content}",
+        )
+        .unwrap();
+        let messages = assemble_messages_for_concept(
+            &conn,
+            ConceptVars {
+                asset_name: "a".into(),
+                project_name: "p".into(),
+                content: "TEST_X".into(),
+            },
+        )
+        .unwrap();
+        let system_field = merged_system_field(&messages);
+        // 自定义模板不影响 system_addon
+        assert!(system_field.contains("knowledge extraction engine"));
+        // 自定义内容确实进入了 user body
+        assert!(messages[2].content.contains("我的自定义抽取指令"));
+        assert!(messages[2].content.contains("TEST_X"));
+    }
+
+    // ---- AC-5：LlmCallContext.user_overridden 状态机 ----
+
+    /// AC-5：未自定义任何 prompt 时，三种 module 的 inspect 都应返回
+    /// user_overridden=false。
+    #[test]
+    fn ac5_inspect_returns_user_overridden_false_when_no_custom_prompt() {
+        let conn = fresh_conn();
+        let m_concept = assemble_messages_for_concept(
+            &conn,
+            ConceptVars {
+                asset_name: "a".into(),
+                project_name: "p".into(),
+                content: "c".into(),
+            },
+        )
+        .unwrap();
+        let ctx_concept = inspect_messages_for_log(&conn, "concept", &m_concept);
+        assert_eq!(ctx_concept.module, "concept");
+        assert!(!ctx_concept.user_overridden);
+        assert!(ctx_concept.total_bytes > 0);
+
+        let m_agg = assemble_messages_for_aggregation(
+            &conn,
+            AggregationVars {
+                concept_name: "X".into(),
+                definition: None,
+                cases_block: "".into(),
+            },
+        )
+        .unwrap();
+        let ctx_agg = inspect_messages_for_log(&conn, "aggregation", &m_agg);
+        assert!(!ctx_agg.user_overridden);
+    }
+
+    /// AC-5：保存 concept 自定义后，inspect 应返回 user_overridden=true。
+    #[test]
+    fn ac5_inspect_returns_user_overridden_true_when_concept_custom() {
+        let conn = fresh_conn();
+        db_user_prompt::upsert(&conn, "concept", "自定义 concept {content}").unwrap();
+        let m = assemble_messages_for_concept(
+            &conn,
+            ConceptVars {
+                asset_name: "a".into(),
+                project_name: "p".into(),
+                content: "c".into(),
+            },
+        )
+        .unwrap();
+        let ctx = inspect_messages_for_log(&conn, "concept", &m);
+        assert!(
+            ctx.user_overridden,
+            "保存自定义 concept 后 user_overridden 应为 true"
+        );
+    }
+
+    /// AC-5：保存 aggregation 自定义后，inspect 应返回 user_overridden=true。
+    #[test]
+    fn ac5_inspect_returns_user_overridden_true_when_aggregation_custom() {
+        let conn = fresh_conn();
+        db_user_prompt::upsert(
+            &conn,
+            "aggregation",
+            "自定义 aggregation {concept_name}",
+        )
+        .unwrap();
+        let m = assemble_messages_for_aggregation(
+            &conn,
+            AggregationVars {
+                concept_name: "X".into(),
+                definition: None,
+                cases_block: "".into(),
+            },
+        )
+        .unwrap();
+        let ctx = inspect_messages_for_log(&conn, "aggregation", &m);
+        assert!(ctx.user_overridden);
+    }
+
+    // ---- build_cases_block helper ----
+
+    /// build_cases_block 应按 i+1 编号渲染多个 case，与原 build_synthesis_prompt
+    /// 循环段字面一致。
+    #[test]
+    fn build_cases_block_renders_indexed_contexts() {
+        let cases = vec![
+            ConceptCase {
+                id: "1".into(),
+                concept_id: "c".into(),
+                title: "AAA".into(),
+                excerpt: "alpha".into(),
+                source_asset_id: None,
+                source_location: None,
+                relevance_note: None,
+            },
+            ConceptCase {
+                id: "2".into(),
+                concept_id: "c".into(),
+                title: "BBB".into(),
+                excerpt: "beta".into(),
+                source_asset_id: None,
+                source_location: None,
+                relevance_note: None,
+            },
+        ];
+        let block = build_cases_block(&cases);
+        assert!(block.contains("### Context 1: AAA\nalpha"));
+        assert!(block.contains("### Context 2: BBB\nbeta"));
+        // 尾随 "\n\n"（与原 build_synthesis_prompt 字面一致）
+        assert!(block.ends_with("\n\n"));
+    }
+
+    /// 空 cases 应渲染为空串。
+    #[test]
+    fn build_cases_block_empty_cases_yields_empty_string() {
+        let block = build_cases_block(&[]);
+        assert!(block.is_empty());
+    }
 }

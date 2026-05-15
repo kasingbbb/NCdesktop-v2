@@ -50,20 +50,40 @@ struct AnthropicContent {
 }
 
 
+/// 把 messages 中所有 `role=="system"` 的 content 按出现顺序用 `\n\n` 合并为单条字符串，
+/// 并返回剥离 system 后的剩余 messages（保持原顺序）。
+///
+/// Anthropic 协议把 system prompt 单独成字段，只接受一个 system 字符串。本函数为
+/// `chat_completion` 的纯逻辑切片：调用方（如 `prompt_runtime::assemble_messages_for_*`）
+/// 会按 "system_message → system_addon → user → output_format_guard" 顺序构造多条
+/// system，本函数把它们按原顺序拼接，保留 "GUARD 永远最后压底" 语义。
+///
+/// 修复历史（task_004 AC-0）：之前用循环覆盖（`system_text = Some(msg.content.clone())`），
+/// 多条 system 只有最后一条送达 Anthropic，前置上下文丢失。
+fn merge_system_messages(messages: Vec<ChatMessage>) -> (Option<String>, Vec<ChatMessage>) {
+    let mut system_parts: Vec<String> = Vec::new();
+    let mut filtered_messages = Vec::new();
+    for msg in messages {
+        if msg.role == "system" {
+            system_parts.push(msg.content);
+        } else {
+            filtered_messages.push(msg);
+        }
+    }
+    let system_text = if system_parts.is_empty() {
+        None
+    } else {
+        Some(system_parts.join("\n\n"))
+    };
+    (system_text, filtered_messages)
+}
+
 /// 同步 Chat Completion（非流式）
 pub async fn chat_completion(
     client: &LLMClient,
     messages: Vec<ChatMessage>,
 ) -> Result<String, String> {
-    let mut system_text = None;
-    let mut filtered_messages = Vec::new();
-    for msg in messages {
-        if msg.role == "system" {
-            system_text = Some(msg.content);
-        } else {
-            filtered_messages.push(msg);
-        }
-    }
+    let (system_text, filtered_messages) = merge_system_messages(messages);
 
     let url = format!("{}/v1/messages", client.base_url.trim_end_matches('/'));
 
@@ -115,4 +135,75 @@ where
 {
     // 目前前端未接入流式，暂时留空返回，后续需适配 Anthropic Stream
     Err("Stream is currently unsupported in Anthropic mode".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sys(s: &str) -> ChatMessage {
+        ChatMessage {
+            role: "system".to_string(),
+            content: s.to_string(),
+        }
+    }
+
+    fn usr(s: &str) -> ChatMessage {
+        ChatMessage {
+            role: "user".to_string(),
+            content: s.to_string(),
+        }
+    }
+
+    /// AC-0：多条 system 必须按顺序用 `\n\n` 合并为单条字符串，
+    /// 而不是循环覆盖只保留最后一条。
+    #[test]
+    fn multiple_system_messages_are_joined_with_double_newline() {
+        let messages = vec![sys("a"), sys("b"), sys("c"), usr("hello")];
+        let (system_text, filtered) = merge_system_messages(messages);
+        assert_eq!(system_text.as_deref(), Some("a\n\nb\n\nc"));
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].role, "user");
+        assert_eq!(filtered[0].content, "hello");
+    }
+
+    /// 单条 system 应原样返回，不引入额外分隔符。
+    #[test]
+    fn single_system_message_returned_verbatim() {
+        let messages = vec![sys("only one"), usr("hello")];
+        let (system_text, filtered) = merge_system_messages(messages);
+        assert_eq!(system_text.as_deref(), Some("only one"));
+        assert_eq!(filtered.len(), 1);
+    }
+
+    /// 无 system → None；filtered 与原始 user/assistant 保持顺序一致。
+    #[test]
+    fn no_system_messages_yields_none_and_preserves_user_order() {
+        let messages = vec![usr("first"), usr("second")];
+        let (system_text, filtered) = merge_system_messages(messages);
+        assert!(system_text.is_none());
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].content, "first");
+        assert_eq!(filtered[1].content, "second");
+    }
+
+    /// system 与 user 交错排列，system 按出现顺序合并，user 顺序保留。
+    /// 验证"GUARD 永远最后压底"语义：messages 末尾的 system（典型为
+    /// `assemble_messages_for_*` 产出的 GUARD）会成为合并后字符串的末段。
+    #[test]
+    fn interleaved_system_and_user_preserved_in_order() {
+        let messages = vec![
+            sys("system_message"),
+            sys("system_addon"),
+            usr("user_body"),
+            sys("GUARD"),
+        ];
+        let (system_text, filtered) = merge_system_messages(messages);
+        assert_eq!(
+            system_text.as_deref(),
+            Some("system_message\n\nsystem_addon\n\nGUARD")
+        );
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].content, "user_body");
+    }
 }

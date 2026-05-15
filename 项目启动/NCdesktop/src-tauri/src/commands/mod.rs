@@ -20,3 +20,5 @@ pub mod conversion;
 pub mod extraction;
 pub mod outbound;
 pub mod source_view;
+// custom_prompt_v1 / task_002：用户自定义 Prompt 4 个 Tauri command。
+pub mod user_prompt;

@@ -55,3 +55,6 @@ export type {
   CoursePreviewReturnTo,
   TodayTab,
 } from "./ui";
+// 用户自定义 Prompt（task_005）— 含运行时常量 PROMPT_MODULES / PROMPT_MODULE_TITLES，
+// 故使用 `export *` 而非 `export type *`。
+export * from "./user-prompt";

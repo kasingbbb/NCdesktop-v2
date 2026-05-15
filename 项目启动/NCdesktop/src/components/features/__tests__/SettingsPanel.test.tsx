@@ -39,6 +39,11 @@ vi.mock("../../settings/CategoryManager", () => ({
 vi.mock("../../settings/PromptEditor", () => ({
   PromptEditor: () => <div data-testid="prompt-editor-mock" />,
 }));
+vi.mock("../../settings/PromptCustomizationPanel", () => ({
+  PromptCustomizationPanel: () => (
+    <div data-testid="prompt-custom-panel-mock" />
+  ),
+}));
 
 import { SettingsPanel, turnLearningOff, turnLearningOn } from "../SettingsPanel";
 import { useSettingsStore } from "../../../stores/settingsStore";

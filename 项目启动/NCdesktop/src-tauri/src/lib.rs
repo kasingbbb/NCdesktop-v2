@@ -15,6 +15,11 @@ pub mod source_scan;
 // 引用 sanitize_stem。utils 目录中的文件早已存在但 lib.rs 未注册，与 scheduler
 // 自身被注释属同一类"注册缺口"。
 pub mod utils;
+// custom_prompt_v1 / task_002：注册 `startup` 模块以暴露 `AppMode` / `ensure_writable`，
+// 修复既有 Architect § 0.7 / R5 缺口（`commands::user_prompt` 写命令依赖 `State<AppMode>`）。
+// 注意：此处仅声明 `startup` 模块本身，**不**自动接入完整 `bootstrap` 流程；
+// `setup` 中只 `app.manage(AppMode::Normal)`，保持 task_002 范围最小。
+pub mod startup;
 
 /// 自动化测试专用：初始化日志、统一 `[TEST]` 前缀（仅 `cargo test` 编译）
 #[cfg(test)]
@@ -45,6 +50,15 @@ pub fn run() {
                 .expect("数据库初始化失败");
 
             app.manage(database);
+
+            // custom_prompt_v1 / task_002：AppMode 前置注册修复（Architect § 0.7 / R5）。
+            // 既有缺口：`commands/prompts.rs` 与 `commands/categories.rs` 使用
+            // `State<'_, AppMode>`，但 setup 中从未 `manage`，导致写命令在运行时
+            // `Manager::state::<AppMode>` 直接 panic。本次仅落最小修复：固定 Normal，
+            // 不接入完整 `startup::bootstrap(...)` 的 repair / Degraded / ReadOnly 流程
+            // （那是单独的、跨多任务的工作）。task_002 范围内安全；后续若 bootstrap
+            // 完整接入，把此处替换为 `app.manage(startup::bootstrap(&db_path).mode)`。
+            app.manage(crate::startup::AppMode::Normal);
 
             // task_011 FIX BLOCKER：PipelineScheduler 须在 setup 阶段 manage，
             // 否则 `app.state::<PipelineScheduler>()`（如 retrigger_extraction:111）
@@ -238,6 +252,12 @@ pub fn run() {
             commands::extraction::get_pipeline_progress,
             commands::outbound::prepare_outbound_payload,
             commands::source_view::reveal_source_file,
+            // custom_prompt_v1 / task_002：用户自定义 Prompt 4 个 Tauri command。
+            // 命名前缀 `user_prompt`，与 PR-4 `prompts.rs` 的 `prompt.override.*` 区隔（R6）。
+            commands::user_prompt::list_user_prompts,
+            commands::user_prompt::get_user_prompt,
+            commands::user_prompt::save_user_prompt,
+            commands::user_prompt::reset_user_prompt,
             #[cfg(debug_assertions)]
             source_scan::source_scan_get_missing,
         ])
