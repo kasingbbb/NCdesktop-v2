@@ -158,13 +158,13 @@ describe("AC-2 loadAll", () => {
     expect(useUserPromptStore.getState().loading).toBe(false);
   });
 
-  it("错误路径：error 字段透传字符串消息 + loading=false", async () => {
+  it("错误路径：error 字段透传字符串消息 + loading=false（task_007_round2：升级为带 module 归属的对象，loadAll 失败 module=null 全局）", async () => {
     mockListUserPrompts.mockRejectedValueOnce("数据库读取失败");
 
     await useUserPromptStore.getState().loadAll();
 
     const s = useUserPromptStore.getState();
-    expect(s.error).toBe("数据库读取失败");
+    expect(s.error).toEqual({ module: null, message: "数据库读取失败" });
     expect(s.loading).toBe(false);
   });
 });
@@ -273,9 +273,11 @@ describe("AC-4 save", () => {
     );
 
     const s = useUserPromptStore.getState();
-    expect(s.error).toBe(
-      "自定义 Prompt 过长（120000 字节，上限 16384 字节），请精简",
-    );
+    // task_007_round2：save 失败 → error 归属到失败的 module
+    expect(s.error).toEqual({
+      module: "para",
+      message: "自定义 Prompt 过长（120000 字节，上限 16384 字节），请精简",
+    });
     // 失败时不调 getUserPrompt（避免覆盖用户正在编辑的草稿）
     expect(mockGetUserPrompt).not.toHaveBeenCalled();
     // drafts / dirty / items 保留，便于用户修改后重试
@@ -342,14 +344,17 @@ describe("AC-5 reset", () => {
     expect(s.error).toBeNull();
   });
 
-  it("reset 错误：error 字段写入 + 抛出", async () => {
+  it("reset 错误：error 字段写入 + 抛出（task_007_round2：单条 reset 失败归属该 module）", async () => {
     mockResetUserPrompt.mockRejectedValueOnce("数据库写入失败");
 
     await expect(useUserPromptStore.getState().reset("tagging")).rejects.toBe(
       "数据库写入失败",
     );
 
-    expect(useUserPromptStore.getState().error).toBe("数据库写入失败");
+    expect(useUserPromptStore.getState().error).toEqual({
+      module: "tagging",
+      message: "数据库写入失败",
+    });
   });
 });
 

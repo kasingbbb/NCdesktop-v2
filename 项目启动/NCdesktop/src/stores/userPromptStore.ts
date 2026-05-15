@@ -80,8 +80,9 @@ interface UserPromptStore {
   /** 整体加载态（loadAll 进行中）。单条 save/reset 不影响此字段；如 UI 需要单条 saving 态，
    *  下游 task_007 在组件内自管 useState（input.md 技术约束："不在 store 中做 UI 状态"）。 */
   loading: boolean;
-  /** 最近一次 IPC 错误（string，原样透传后端中文错误消息）。 */
-  error: string | null;
+  /** 最近一次 IPC 错误：归属到具体 module（save/reset(module) 失败）或 null（全局：loadAll/reset(null) 失败）；
+   *  message 原样透传后端中文错误消息。task_007_round2 由"单值字符串"升级为带归属对象，避免多个展开子项重复显示同一条错误。 */
+  error: { module: PromptModule | null; message: string } | null;
 
   /** 加载全部 4 条；填充 items 与 drafts。 */
   loadAll: () => Promise<void>;
@@ -123,7 +124,8 @@ export const useUserPromptStore = create<UserPromptStore>((set, get) => ({
 
       set({ items, drafts, dirty, loading: false });
     } catch (e) {
-      set({ error: String(e), loading: false });
+      // 全局错误（loadAll）：module=null，UI 顶部展示
+      set({ error: { module: null, message: String(e) }, loading: false });
     }
   },
 
@@ -151,7 +153,8 @@ export const useUserPromptStore = create<UserPromptStore>((set, get) => ({
       }));
     } catch (e) {
       // 不动 drafts / dirty / items（让用户原地修改后重试）
-      set({ error: String(e) });
+      // 归属到失败的 module，UI 仅在该子项下方渲染（task_007_round2 去重）
+      set({ error: { module, message: String(e) } });
       throw e;
     }
   },
@@ -173,7 +176,8 @@ export const useUserPromptStore = create<UserPromptStore>((set, get) => ({
         }));
       }
     } catch (e) {
-      set({ error: String(e) });
+      // module=null（全部恢复）→ 全局错误；module 非 null → 单条错误归属该 module
+      set({ error: { module, message: String(e) } });
       throw e;
     }
   },

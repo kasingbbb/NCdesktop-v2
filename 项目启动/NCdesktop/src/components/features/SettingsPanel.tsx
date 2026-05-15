@@ -12,9 +12,19 @@ import {
 } from "lucide-react";
 import { useSettingsStore } from "../../stores";
 import { useUIStore } from "../../stores/uiStore";
+import { useUserPromptStore } from "../../stores/userPromptStore";
 import { LLMSettingsForm } from "./bridge/LLMSettingsForm";
 import { PromptCustomizationPanel } from "../settings/PromptCustomizationPanel";
 import type { AppSettings } from "../../types";
+
+/** AC-8：离开前若有未保存的 Prompt 草稿，弹 confirm 守卫，避免误丢。 */
+function confirmIfPromptDirty(): boolean {
+  const dirty = useUserPromptStore.getState().dirty;
+  if (Object.values(dirty).some(Boolean)) {
+    return window.confirm("有未保存的 Prompt 修改，确定离开吗？");
+  }
+  return true;
+}
 
 type SettingsTab =
   | "appearance"
@@ -45,12 +55,22 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("appearance");
   const { settings, updateSetting, setTheme } = useSettingsStore();
 
+  // AC-8：onClose / 切 Tab 离开 Prompt 自定义页前的 dirty 守卫
+  const handleClose = () => {
+    if (activeTab === "prompt" && !confirmIfPromptDirty()) return;
+    onClose();
+  };
+  const handleSwitchTab = (next: SettingsTab) => {
+    if (activeTab === "prompt" && next !== "prompt" && !confirmIfPromptDirty()) return;
+    setActiveTab(next);
+  };
+
   return (
     <>
       <div
         className="fixed inset-0 z-50"
         style={{ backgroundColor: "rgba(0, 0, 0, 0.4)" }}
-        onClick={onClose}
+        onClick={handleClose}
       />
 
       <div
@@ -86,7 +106,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                     color: isActive ? "var(--text-primary)" : "var(--text-secondary)",
                     fontWeight: isActive ? 600 : 400,
                   }}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={() => handleSwitchTab(tab.id)}
                 >
                   <Icon size={14} />
                   <span className="text-[var(--text-sm)]">{tab.label}</span>
@@ -99,7 +119,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         {/* 右侧内容 */}
         <div className="flex-1 flex flex-col">
           <div className="flex items-center justify-end px-[var(--space-4)] py-[var(--space-3)]">
-            <button className="p-1 rounded-[var(--radius-sm)] transition-colors" onClick={onClose}>
+            <button className="p-1 rounded-[var(--radius-sm)] transition-colors" onClick={handleClose}>
               <X size={16} style={{ color: "var(--text-secondary)" }} />
             </button>
           </div>

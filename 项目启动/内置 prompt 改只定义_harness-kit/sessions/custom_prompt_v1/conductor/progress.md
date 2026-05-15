@@ -2,8 +2,8 @@
 
 ## 当前状态
 
-- **STATE**: `UX_REVIEWED`（task_009 PASS；下一步进入 task_010 Architecture Guard 终审，或先做 task_007 v2 微改修 3 MAJOR）
-- **当前 Task**: 无（task_009 完成；阶段性节点 — git commit 中）
+- **STATE**: `ACCEPTANCE`（所有 task PASS，等待 PM 验收）
+- **当前 Task**: 无（流水线已完成）
 - **更新时间**: 2026-05-15
 
 ---
@@ -66,23 +66,18 @@
 - **task_007_dev_frontend_ui** — PromptCustomizationPanel + SettingsPanel 新增 Tab。Reviewer 综合 4.80/5 PASS（0 BLOCKER / 0 MAJOR / 3 MINOR 文案/UX 选择）。23/23 vitest + tsc 0 error。R6/ADR-005 严守，PR-4 半成品零触碰。DONE 2026-05-15
 - **task_008_test_e2e** — Rust e2e 集成测试（8 类场景：正常/占位符/16KB+1 保存层/64KB 调用前/R1 对抗式/单条恢复/全部恢复/R3 兼容）+ 33 项手动测试清单。Reviewer 综合 4.80/5 PASS（0 BLOCKER / 0 MAJOR / 2 MINOR）。e2e 20/20 + lib 342/342 全绿，零回归。生产代码零改动。DONE 2026-05-15
 - **task_009_ux_review** — UX 体验审查（10 项 Nielsen 启发式 + 5 核心旅程走查 + 技术性 UX 检查 + R4 文案决议）。启发式平均 3.5/5，5 旅程全畅通（A 编辑保存 3.5 / B 单条恢复 4.5 / C 全部恢复 4.5 / D 字节超限 4.5 / E 占位符 5.0）。0 BLOCKER / 3 MAJOR / 7 MINOR；**判定 PASS**（无核心旅程阻断）。R4 文案建议：方案 B（para/tagging 折叠头加共享调用副标题 < 10 行）。建议 task_007 二轮微改 < 50 行修 3 MAJOR（spinner+toast / 错误横条多子项重复 / aria-disabled+aria-label），但非阻塞。DONE 2026-05-15
+- **task_007_round2_fix_ux** — task_007 二轮微改：AC-1 saving spinner / AC-2 aria 属性 / AC-3 错误横条按 module 去重（store error 升级为 `{module, message} \| null`）/ AC-4 R4 方案 B 副标题（tagging/para）/ AC-5~AC-8 MINOR 顺手修。Reviewer 综合 4.80/5 PASS（0 BLOCKER / 0 MAJOR / 3 MINOR）。9/9 AC ✅。tsc 0 error；29/29 + 20/20 测试全绿。生产代码 +131/-35（净 +96，逻辑 ~88 行；超 80 软上限 10%，Conductor + Reviewer 双重接受偏差，全部归因 AC 强制 JSX 结构展开非镀金）。DONE 2026-05-15
+- **task_010_architecture_guard** — Architecture Guard 全局架构一致性扫描（L 复杂度强制终审）。提取 5 条架构原则（ADR-001~005），6 维度评分均 4-5/5；架构健康 **4.83/5**；R1~R9 9 项风险全闭环；PR-4 半成品零污染验证通过（`git log main..HEAD` 对 3 个半成品文件空输出）；cargo lib 342/342 + e2e 20/20 + tsc 0 error + cargo build 0 deprecated warning。**0 BLOCKER / 0 WARNING / 4 INFO**（builtin_version MVP 未读取的已知预留 / PR-4 孤儿待独立 task 清理 / UI 16 KB 文案小硬编码 / chat_completion_stream 占位 stub，全部不阻塞）。**建议继续到 ACCEPTANCE**。DONE 2026-05-15
 
 ---
 
 ## 当前 Task 详情
 
-**阶段性节点：UX 评审 PASS（task_009 完成）**
+**🎉 流水线已完成（ACCEPTANCE 状态）**
 
-- 9/10 task 已 PASS（task_001~task_009）
-- 仅剩 `task_010_architecture_guard` 终审待启动
-- 用户已要求在该节点 git commit + 留 continue prompt，下一次会话恢复
-
-**可选分支（恢复后由用户决定）**：
-1. 直接启动 `task_010_architecture_guard`（Architecture Guard 终审，扫描 ADR 落地 / 目录一致 / 契约一致 / 风险闭环）
-2. 先做 `task_007 v2 微改`（修 task_009 提出的 3 MAJOR + 部分 MINOR，预估 < 50 行），再启动 task_010
-3. 先做 R4 文案落地（方案 B，~10 行）+ 3 MAJOR 修复，再启动 task_010
-
-**Conductor 建议**：选项 2 或 3。task_010 在所有可见瑕疵修复后扫描会更有意义；且 < 50 行改动风险低。
+- 11/11 task 全部 PASS：task_001 Architect / task_002~007 Dev × 6 / task_007_round2 UX 二轮 / task_008 e2e / task_009 UX / task_010 Architecture Guard
+- 架构健康 4.83/5；R1~R9 全闭环；PR-4 半成品零污染
+- 等待 PM 验收（按 Conductor prompt § 验收暂停格式输出摘要给用户）
 
 ---
 
@@ -160,3 +155,8 @@ task_005 ──┴─► task_006 ──► task_007 ──┘
 [2026-05-15] STATE: REVIEWING → DEVELOPING | Task: task_004 PASS(4.80/5) + task_007 PASS(4.80/5) → 启动 task_008 | 原因: 第四波双双 PASS（0 BLOCKER / 0 MAJOR）；R1/R2/R4/R6/R8 全部闭环；按拓扑进入 task_008 端到端测试 | 风险: 低（task_008 主要是聚合验证，无新代码路径）
 [2026-05-15] STATE: DEVELOPING → REVIEWING → UX_REVIEW | Task: task_008 PASS(4.80/5) → 启动 task_009 UX 评审 | 原因: e2e 测试 20/20 PASS + 全表 342/342 零回归 + 33 项手动测试清单交付；R1 对抗式 / R3 兼容 / 4 module 独立等关键场景全覆盖 | 风险: 低
 [2026-05-15] STATE: UX_REVIEW → UX_REVIEWED（阶段性节点） | Task: task_009 PASS（启发式 3.5/5，0 BLOCKER / 3 MAJOR / 7 MINOR） | 原因: 5 核心旅程畅通无阻断；R4 文案建议方案 B（< 10 行）；建议 task_007 二轮微改 < 50 行修 3 MAJOR；用户指定此处 git commit + 留 continue prompt | 风险: 无（生产代码无改动，仅文档/UX 报告）
+[2026-05-15] git commit ec8ec3c — "feat: 用户自定义 Prompt（task 1-9 PASS，仅剩 Architecture Guard）"。75 文件 +11915 -67。
+[2026-05-15] STATE: UX_REVIEWED → DEVELOPING | Task: task_007_round2_fix_ux | 原因: 用户续接 Conductor，按路径 A 推进（先修 3 MAJOR + R4 文案 ~45 行，再进 task_010）；新建 task_007_round2 工作目录与 input.md（含 9 个 AC + 工作量自检阀门 80 行） | 风险: 低（前端微改，零接口签名变动）
+[2026-05-15] STATE: DEVELOPING → REVIEWING | Task: task_007_round2 交付 | 原因: Dev 完成全部 9 AC，tsc/测试全绿，仅工作量轻微超阈值（+10%）| 风险: 低
+[2026-05-15] STATE: REVIEWING → ARCHITECTURE_GUARD | Task: task_007_round2 PASS(4.80/5) → 启动 task_010 | 原因: 9/9 AC ✅；Reviewer 独立判定接受工作量偏差（非镀金）；进入 L 复杂度强制的 Architecture Guard 终审 | 风险: 低（终审为扫描，无新代码）
+[2026-05-15] STATE: ARCHITECTURE_GUARD → ACCEPTANCE | Task: task_010 PASS（架构健康 4.83/5）| 原因: 6 维度评分均 4-5；R1~R9 全闭环；PR-4 零污染；实跑全绿（lib 342/342 + e2e 20/20 + tsc 0 error）；0 BLOCKER / 0 WARNING / 4 非阻塞 INFO。流水线终结，等待 PM 验收 | 风险: 无

@@ -21,7 +21,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, AlertTriangle } from "lucide-react";
 import { useUserPromptStore } from "../../stores/userPromptStore";
 import {
   PROMPT_MODULES,
@@ -29,6 +29,12 @@ import {
   type PromptInfo,
   type PromptModule,
 } from "../../types/user-prompt";
+
+/** R4 方案 B：折叠头副标题（tagging / para 揭示"合并到同一次分类调用"线索）。 */
+const PROMPT_MODULE_SUBTITLES: Partial<Record<PromptModule, string>> = {
+  tagging: "与「PARA 分组」共用同一次分类调用，两者同时生效",
+  para: "与「文件打标签」共用同一次分类调用，两者同时生效",
+};
 
 /** 占位符是否全部满足。 */
 function checkPlaceholdersOk(text: string, required: string[]): boolean {
@@ -118,8 +124,23 @@ export function PromptCustomizationPanel() {
       >
         <p>以下为系统内置的 AI 处理策略。</p>
         <p>修改后将影响对应功能的输出结果。</p>
-        <p>如不确定,请保持默认值。</p>
+        <p>如不确定，请保持默认值。</p>
       </div>
+
+      {/* 全局错误横条（AC-3：loadAll / reset(null) 失败时顶部展示一次，不再每个子项重复） */}
+      {error && error.module === null && (
+        <div
+          data-testid="error-banner-global"
+          className="px-[var(--space-2)] py-[var(--space-2)] rounded-[var(--radius-sm)] text-[var(--text-xs)]"
+          style={{
+            backgroundColor: "rgba(239, 68, 68, 0.08)",
+            color: "#dc2626",
+            border: "1px solid rgba(239, 68, 68, 0.2)",
+          }}
+        >
+          {error.message}
+        </div>
+      )}
 
       {/* 4 个折叠子项 */}
       <div className="space-y-[var(--space-2)]">
@@ -128,6 +149,7 @@ export function PromptCustomizationPanel() {
             key={module}
             module={module}
             title={PROMPT_MODULE_TITLES[module]}
+            subtitle={PROMPT_MODULE_SUBTITLES[module]}
             item={items[module]}
             draft={drafts[module]}
             isDirty={dirty[module]}
@@ -187,11 +209,13 @@ export function PromptCustomizationPanel() {
 interface PromptModuleSectionProps {
   module: PromptModule;
   title: string;
+  /** R4 方案 B：折叠头副标题（tagging/para 有，concept/aggregation 无） */
+  subtitle?: string;
   item: PromptInfo | null;
   draft: string;
   isDirty: boolean;
   isExpanded: boolean;
-  error: string | null;
+  error: { module: PromptModule | null; message: string } | null;
   onToggle: () => void;
   onDraftChange: (text: string) => void;
   onSave: () => Promise<void>;
@@ -202,6 +226,7 @@ interface PromptModuleSectionProps {
 function PromptModuleSection({
   module,
   title,
+  subtitle,
   item,
   draft,
   isDirty,
@@ -219,11 +244,28 @@ function PromptModuleSection({
   const overByteLimit = byteLen > maxBytes;
   const isCustom = item?.isCustom ?? false;
 
-  // 保存按钮禁用条件（AC-2 顺序）：① 占位符未满足 ② 字节超限 ③ dirty=false
-  const saveDisabled = !placeholdersOk || overByteLimit || !isDirty;
+  // 保存中（task_007_round2 AC-1）：组件内自管，按 input.md "不在 store 中做 UI 状态"
+  const [saving, setSaving] = useState(false);
+
+  // 保存按钮禁用条件（AC-2 顺序）：① 占位符未满足 ② 字节超限 ③ dirty=false ④ saving 中
+  const saveDisabled = !placeholdersOk || overByteLimit || !isDirty || saving;
 
   // 单条"恢复默认"按钮：仅在已自定义时可点
   const resetDisabled = !isCustom;
+
+  // 保存按钮禁用原因（AC-2：title tooltip 解释）
+  const saveDisabledReason = !isDirty
+    ? "无未保存修改"
+    : !placeholdersOk
+    ? "占位符未满足"
+    : overByteLimit
+    ? "字节超出上限"
+    : saving
+    ? "保存中…"
+    : undefined;
+
+  // AC-3：仅当 store.error 归属该 module 时才在子项下方渲染（全局错误由顶部 banner 渲染）
+  const moduleError = error && error.module === module ? error.message : null;
 
   return (
     <div
@@ -243,19 +285,31 @@ function PromptModuleSection({
         aria-expanded={isExpanded}
       >
         {isExpanded ? (
-          <ChevronDown size={14} style={{ color: "var(--text-tertiary)" }} />
+          <ChevronDown size={12} style={{ color: "var(--text-tertiary)" }} />
         ) : (
-          <ChevronRight size={14} style={{ color: "var(--text-tertiary)" }} />
+          <ChevronRight size={12} style={{ color: "var(--text-tertiary)" }} />
         )}
-        <span
-          className="text-[var(--text-sm)] font-medium"
-          style={{ color: "var(--text-primary)" }}
-        >
-          {title}
-        </span>
+        <div className="flex-1 min-w-0">
+          <div
+            className="text-[var(--text-sm)] font-medium"
+            style={{ color: "var(--text-primary)" }}
+          >
+            {title}
+          </div>
+          {/* R4 方案 B：tagging/para 副标题，揭示后端共用调用 */}
+          {subtitle && (
+            <div
+              data-testid={`prompt-subtitle-${module}`}
+              className="text-[var(--text-xs)] mt-0.5"
+              style={{ color: "var(--text-tertiary)" }}
+            >
+              {subtitle}
+            </div>
+          )}
+        </div>
         {/* 标题行右侧的状态指示（折叠态也可见，方便用户一眼看到哪些已自定义） */}
         <span
-          className="ml-auto text-[var(--text-xs)] flex items-center gap-1"
+          className="text-[var(--text-xs)] flex items-center gap-1 flex-shrink-0"
           data-testid={`prompt-status-${module}`}
           style={{
             color: isCustom ? "var(--color-accent)" : "var(--text-tertiary)",
@@ -303,6 +357,7 @@ function PromptModuleSection({
             value={draft}
             onChange={(e) => onDraftChange(e.target.value)}
             rows={14}
+            aria-label={`${title} 的 Prompt 编辑区`}
             className="w-full font-mono text-[12px] px-[var(--space-2)] py-[var(--space-2)] rounded-[var(--radius-sm)] resize-y"
             style={{
               backgroundColor: "var(--surface-elevated)",
@@ -325,14 +380,20 @@ function PromptModuleSection({
             </div>
           )}
 
-          {/* 字节计数 */}
-          <div className="flex items-center justify-between">
-            <span
-              className="text-[var(--text-xs)]"
-              style={{ color: "var(--text-tertiary)" }}
+          {/* 字节超限警告（AC-6：独立一行 + AlertTriangle，比同行更醒目） */}
+          {overByteLimit && (
+            <div
+              data-testid={`byte-overflow-warning-${module}`}
+              className="flex items-center gap-1 text-[var(--text-xs)]"
+              style={{ color: "#ef4444" }}
             >
-              {overByteLimit ? "已超过 16 KB 上限" : ""}
-            </span>
+              <AlertTriangle size={14} aria-hidden />
+              <span>已超过 16 KB 上限</span>
+            </div>
+          )}
+
+          {/* 字节计数 */}
+          <div className="flex items-center justify-end">
             <span
               data-testid={`byte-counter-${module}`}
               className="text-[var(--text-xs)] font-mono tabular-nums"
@@ -348,6 +409,7 @@ function PromptModuleSection({
               type="button"
               data-testid={`reset-button-${module}`}
               disabled={resetDisabled}
+              aria-disabled={resetDisabled}
               onClick={() => void onReset()}
               className="px-[var(--space-3)] py-[var(--space-1)] rounded-[var(--radius-sm)] text-[var(--text-xs)] transition-colors"
               style={{
@@ -364,8 +426,17 @@ function PromptModuleSection({
               type="button"
               data-testid={`save-button-${module}`}
               disabled={saveDisabled}
-              onClick={() => void onSave()}
-              className="px-[var(--space-3)] py-[var(--space-1)] rounded-[var(--radius-sm)] text-[var(--text-xs)] font-medium transition-colors"
+              aria-disabled={saveDisabled}
+              title={saveDisabledReason}
+              onClick={async () => {
+                setSaving(true);
+                try {
+                  await onSave();
+                } finally {
+                  setSaving(false);
+                }
+              }}
+              className="inline-flex items-center gap-1 px-[var(--space-3)] py-[var(--space-1)] rounded-[var(--radius-sm)] text-[var(--text-xs)] font-medium transition-colors"
               style={{
                 backgroundColor: saveDisabled ? "var(--surface-tertiary)" : "var(--color-accent)",
                 color: saveDisabled ? "var(--text-tertiary)" : "#ffffff",
@@ -374,12 +445,13 @@ function PromptModuleSection({
                 opacity: saveDisabled ? 0.6 : 1,
               }}
             >
-              保存
+              {saving && <Loader2 size={12} className="animate-spin" aria-hidden />}
+              <span>{saving ? "保存中…" : "保存"}</span>
             </button>
           </div>
 
-          {/* 错误横条（AC-4：折叠子项下方红色） */}
-          {error && (
+          {/* 错误横条（AC-3：仅在 store.error 归属本 module 时渲染；全局错误由顶部 banner 渲染） */}
+          {moduleError && (
             <div
               data-testid={`error-banner-${module}`}
               className="px-[var(--space-2)] py-[var(--space-2)] rounded-[var(--radius-sm)] text-[var(--text-xs)]"
@@ -389,7 +461,7 @@ function PromptModuleSection({
                 border: "1px solid rgba(239, 68, 68, 0.2)",
               }}
             >
-              {error}
+              {moduleError}
             </div>
           )}
         </div>

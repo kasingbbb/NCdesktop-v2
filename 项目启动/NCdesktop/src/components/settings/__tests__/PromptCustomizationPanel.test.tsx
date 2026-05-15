@@ -49,7 +49,8 @@ interface TestStore {
   drafts: Record<PromptModule, string>;
   dirty: Record<PromptModule, boolean>;
   loading: boolean;
-  error: string | null;
+  // task_007_round2：error 升级为带 module 归属的对象（去重）
+  error: { module: PromptModule | null; message: string } | null;
   loadAll: ReturnType<typeof vi.fn>;
   setDraft: ReturnType<typeof vi.fn>;
   save: ReturnType<typeof vi.fn>;
@@ -93,7 +94,7 @@ function seedLoaded(opts?: {
   aggregation?: Partial<PromptInfo>;
   drafts?: Partial<Record<PromptModule, string>>;
   dirty?: Partial<Record<PromptModule, boolean>>;
-  error?: string | null;
+  error?: { module: PromptModule | null; message: string } | null;
 }) {
   const items: Record<PromptModule, PromptInfo | null> = {
     tagging: makeInfo("tagging", opts?.tagging),
@@ -429,22 +430,41 @@ describe("附加：占位符 chip 展示", () => {
   });
 });
 
-describe("AC-4 错误横条", () => {
-  it("store.error 非空 + 折叠展开 → 显示该子项下方红色横条", () => {
-    seedLoaded({ error: "保存失败：服务暂不可用" });
+describe("AC-3 错误横条（去重：归属到具体 module，全局错误顶部一次）", () => {
+  it("store.error.module === 'tagging' + tagging 展开 → 仅 tagging 子项显示，concept 子项无重复", () => {
+    seedLoaded({
+      error: { module: "tagging", message: "保存失败：服务暂不可用" },
+    });
+    render(<PromptCustomizationPanel />);
+    fireEvent.click(screen.getByTestId("prompt-toggle-tagging"));
+    fireEvent.click(screen.getByTestId("prompt-toggle-concept"));
+
+    // tagging 下方有
+    const banner = screen.getByTestId("error-banner-tagging");
+    expect(banner.textContent).toContain("保存失败：服务暂不可用");
+    // concept 下方无（去重）
+    expect(screen.queryByTestId("error-banner-concept")).not.toBeInTheDocument();
+    // 顶部全局 banner 也不出现（因 module 非 null）
+    expect(screen.queryByTestId("error-banner-global")).not.toBeInTheDocument();
+  });
+
+  it("store.error.module === null（全局：loadAll 失败）→ 顶部 banner 出现，子项下方均无", () => {
+    seedLoaded({
+      error: { module: null, message: "数据库读取失败" },
+    });
     render(<PromptCustomizationPanel />);
     fireEvent.click(screen.getByTestId("prompt-toggle-tagging"));
 
-    const banner = screen.getByTestId("error-banner-tagging");
-    expect(banner).toBeInTheDocument();
-    expect(banner.textContent).toContain("保存失败：服务暂不可用");
+    const globalBanner = screen.getByTestId("error-banner-global");
+    expect(globalBanner.textContent).toContain("数据库读取失败");
+    expect(screen.queryByTestId("error-banner-tagging")).not.toBeInTheDocument();
   });
 
   it("点击保存时操作前清空 error（再次失败由后续 save 写入）", async () => {
     seedLoaded({
       drafts: { tagging: "改过的" },
       dirty: { tagging: true },
-      error: "上一轮残留的错误消息",
+      error: { module: "tagging", message: "上一轮残留的错误消息" },
     });
     const save = vi.fn(async () => {});
     mockStore.setState({ save });
@@ -458,5 +478,85 @@ describe("AC-4 错误横条", () => {
     // 操作前清空 → 此时 mockStore.error 应为 null
     expect(mockStore.getState().error).toBeNull();
     expect(save).toHaveBeenCalledWith("tagging");
+  });
+});
+
+describe("AC-1 saving 反馈 / AC-2 无障碍 / AC-4 R4 副标题（task_007_round2 二轮修复）", () => {
+  it("AC-1：保存中按钮显示 spinner + 文案『保存中…』+ disabled；resolve 后恢复", async () => {
+    seedLoaded({
+      drafts: { tagging: "改过的 prompt" },
+      dirty: { tagging: true },
+    });
+    let resolveSave: (() => void) | null = null;
+    const save = vi.fn(
+      () => new Promise<void>((resolve) => { resolveSave = () => resolve(); }),
+    );
+    mockStore.setState({ save });
+    render(<PromptCustomizationPanel />);
+
+    fireEvent.click(screen.getByTestId("prompt-toggle-tagging"));
+    const saveBtn = screen.getByTestId("save-button-tagging");
+    expect(saveBtn.textContent).toContain("保存");
+    expect(saveBtn.textContent).not.toContain("保存中");
+
+    // 不 await，让 promise pending
+    act(() => {
+      fireEvent.click(saveBtn);
+    });
+    // saving=true：disabled + 文案变化
+    expect(saveBtn).toBeDisabled();
+    expect(saveBtn.textContent).toContain("保存中");
+
+    // resolve 后恢复
+    await act(async () => {
+      resolveSave!();
+      await Promise.resolve();
+    });
+    expect(saveBtn.textContent).not.toContain("保存中");
+  });
+
+  it("AC-2：保存按钮 disabled 时有 aria-disabled 属性", () => {
+    seedLoaded(); // dirty 全 false → save 按钮 disabled
+    render(<PromptCustomizationPanel />);
+    fireEvent.click(screen.getByTestId("prompt-toggle-tagging"));
+
+    const saveBtn = screen.getByTestId("save-button-tagging");
+    expect(saveBtn).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("AC-2：textarea 可通过 aria-label 定位（screen reader 支持）", () => {
+    seedLoaded();
+    render(<PromptCustomizationPanel />);
+    fireEvent.click(screen.getByTestId("prompt-toggle-tagging"));
+
+    expect(
+      screen.getByLabelText("文件打标签 的 Prompt 编辑区"),
+    ).toBeInTheDocument();
+  });
+
+  it("AC-4：tagging / para 折叠头有 R4 副标题；concept / aggregation 无", () => {
+    seedLoaded();
+    render(<PromptCustomizationPanel />);
+
+    const taggingSub = screen.getByTestId("prompt-subtitle-tagging");
+    expect(taggingSub.textContent).toContain("与「PARA 分组」共用同一次分类调用");
+    const paraSub = screen.getByTestId("prompt-subtitle-para");
+    expect(paraSub.textContent).toContain("与「文件打标签」共用同一次分类调用");
+
+    expect(screen.queryByTestId("prompt-subtitle-concept")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("prompt-subtitle-aggregation")).not.toBeInTheDocument();
+  });
+
+  it("AC-6：字节超限时独立警告行 + AlertTriangle 图标存在", () => {
+    seedLoaded({
+      drafts: { tagging: "x".repeat(17000) },
+      dirty: { tagging: true },
+    });
+    render(<PromptCustomizationPanel />);
+    fireEvent.click(screen.getByTestId("prompt-toggle-tagging"));
+
+    const warning = screen.getByTestId("byte-overflow-warning-tagging");
+    expect(warning).toBeInTheDocument();
+    expect(warning.textContent).toContain("已超过 16 KB 上限");
   });
 });
