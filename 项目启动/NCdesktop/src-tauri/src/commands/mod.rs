@@ -16,6 +16,10 @@ pub mod knowledge_understanding;
 pub mod knowledge;
 pub mod knowledge_units;
 pub mod knowledge_synthesis;
+// 知识图谱（Step 9）：前端 KnowledgeGraphView 力导向图数据源。
+// 此模块原先存在但未在 mod.rs 声明 → KnowledgeGraphView 启动时
+// `Importing binding name 'getKnowledgeGraph' is not found` BLOCKER。
+pub mod knowledge_graph;
 pub mod conversion;
 pub mod extraction;
 pub mod outbound;

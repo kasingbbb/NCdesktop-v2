@@ -232,6 +232,8 @@ pub fn run() {
             commands::knowledge::synthesize_viewpoints,
             commands::knowledge::generate_extensions,
             commands::knowledge_synthesis::synthesize_knowledge_units,
+            // 知识图谱（Step 9）：前端 KnowledgeGraphView 力导向图数据源。
+            commands::knowledge_graph::get_knowledge_graph,
             commands::knowledge_units::ku_get_list,
             commands::knowledge_units::ku_get_detail,
             commands::knowledge_units::ku_create,

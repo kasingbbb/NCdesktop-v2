@@ -852,3 +852,44 @@ export async function saveUserPrompt(module: PromptModule, text: string): Promis
 export async function resetUserPrompt(module: PromptModule | null): Promise<void> {
   return invoke<void>("reset_user_prompt", { module });
 }
+
+// ── Knowledge Graph (Step 9) ──────────────────────────
+// 前端 KnowledgeGraphView 力导向图数据源。
+// 后端真相来源：`src-tauri/src/commands/knowledge_graph.rs::get_knowledge_graph`
+// 之前因 `commands/mod.rs` 未声明该模块 + invoke_handler 未注册而导致
+// `Importing binding name 'getKnowledgeGraph' is not found` BLOCKER。
+
+/** 图谱节点：与后端 `GraphNode`（serde rename_all = camelCase）逐字段对齐。 */
+export interface GraphNode {
+  id: string;
+  title: string;
+  coreInsight: string;
+  status: string;
+  depthLevel: number;
+  sourceAssetCount: number;
+  /** 分组/颜色用：inferred_course（来自 asset_inferences）。 */
+  inferredCourse: string | null;
+}
+
+/** 图谱边：与后端 `GraphEdge` 对齐。 */
+export interface GraphEdge {
+  source: string;
+  target: string;
+  /** "concept" | "similarity" | "supplement" */
+  edgeType: string;
+  /** 0.0–1.0，影响边粗细 */
+  weight: number;
+  /** true ⇒ 跨域虚线渲染 */
+  isCrossDomain: boolean;
+}
+
+/** 图谱数据集：与后端 `KnowledgeGraphData` 对齐。 */
+export interface KnowledgeGraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+/** 加载指定知识库的图谱（节点 + 边）。 */
+export async function getKnowledgeGraph(libraryId: string): Promise<KnowledgeGraphData> {
+  return invoke<KnowledgeGraphData>("get_knowledge_graph", { libraryId });
+}
