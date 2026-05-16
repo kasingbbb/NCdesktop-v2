@@ -72,4 +72,9 @@ export interface ExtractionProgress {
   processed: number;
   conceptsFound: number;
   status: "running" | "completed" | "error";
+  /**
+   * 错误信息（仅 status === "error" 时由后端 emit 或前端兜底填入）。
+   * concept_rescan_perf_v1 / task_perf_02：错误态进度条文案展示用。
+   */
+  error?: string | null;
 }

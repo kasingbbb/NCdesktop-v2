@@ -226,6 +226,9 @@ pub fn run() {
             commands::knowledge::update_concept,
             commands::knowledge::delete_concept,
             commands::knowledge::extract_concepts_for_library,
+            // task_perf_01_backend：新 IPC 名（前端 task_perf_02 期望签名 force_full）。
+            // 旧名 extract_concepts_for_library 同时保留为 thin wrapper，避免破坏既有调用。
+            commands::knowledge::start_concept_extraction,
             commands::knowledge::synthesize_viewpoints,
             commands::knowledge::generate_extensions,
             commands::knowledge_synthesis::synthesize_knowledge_units,

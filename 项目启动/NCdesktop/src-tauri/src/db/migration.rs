@@ -54,6 +54,42 @@ pub fn run_migrations(conn: &Connection) -> Result<(), String> {
         v15_user_custom_prompt(conn)?;
     }
 
+    if current_version < 16 {
+        v16_assets_concept_extracted_at(conn)?;
+    }
+
+    Ok(())
+}
+
+/// V16（concept_rescan_perf_v1 / task_perf_01_backend）：`assets` 表追加
+/// `concept_extracted_at TEXT NULL` 字段，用于 P1 增量扫描标记。
+///
+/// 设计依据（input.md AC-1 / AC-5）：
+/// - `extract_concepts_for_library(force_full=false)` 时 `SELECT ... WHERE concept_extracted_at IS NULL`
+///   只处理未扫描素材；`force_full=true` 时先 `UPDATE ... SET concept_extracted_at = NULL`
+///   清空标记后再全量。
+/// - 字段语义为"最近一次成功完成 LLM 概念抽取的时间戳"。失败素材保持 NULL，
+///   下次增量自动重试。
+/// - 与既有 F-8 `concepts_extraction_log(asset_id, content_hash)` 表并存：
+///   F-8 按 content_hash 去重单 (asset, hash) 对；V16 标记则按"任意 hash 成功一次"，
+///   是 force_full 的 escape hatch 真相来源。
+///
+/// 幂等：仿 V5 / V12 模式用 `PRAGMA table_info(assets)` 守卫，避免重复
+/// `ADD COLUMN` 在已升级 DB 上报 `duplicate column` 错误（R5 风险）。
+fn v16_assets_concept_extracted_at(conn: &Connection) -> Result<(), String> {
+    let existing_cols = list_table_columns(conn, "assets")?;
+
+    if !existing_cols.iter().any(|c| c == "concept_extracted_at") {
+        conn.execute_batch(
+            "ALTER TABLE assets ADD COLUMN concept_extracted_at TEXT DEFAULT NULL;",
+        )
+        .map_err(|e| format!("V16 迁移失败（添加 concept_extracted_at 列）: {e}"))?;
+    }
+
+    conn.execute_batch("PRAGMA user_version = 16;")
+        .map_err(|e| format!("V16 迁移失败（置版本）: {e}"))?;
+
+    log::info!("数据库迁移 V16 完成：assets.concept_extracted_at（P1 增量扫描标记）");
     Ok(())
 }
 
@@ -839,13 +875,13 @@ mod tests {
         assert!(index_exists(&conn, "idx_cm_source"));
         assert!(index_exists(&conn, "idx_cm_derived"));
         assert!(index_exists(&conn, "idx_cm_converted_at"));
-        // V12+V13+V14+V15 紧随 V11 跑完，把 user_version 推到 15。
-        assert_eq!(user_version(&conn), 15);
+        // V12+V13+V14+V15+V16 紧随 V11 跑完，把 user_version 推到 16。
+        assert_eq!(user_version(&conn), 16);
     }
 
-    /// 全新库：V1..V8 + V11..V15 全跑完；包含 user_custom_prompt 与索引；版本=15。
+    /// 全新库：V1..V8 + V11..V16 全跑完；包含 user_custom_prompt 与索引；版本=16。
     #[test]
-    fn fresh_db_runs_all_migrations_to_v15() {
+    fn fresh_db_runs_all_migrations_to_v16() {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).expect("fresh migrations succeed");
 
@@ -884,11 +920,17 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM user_custom_prompt", [], |r| r.get(0))
             .unwrap();
         assert_eq!(row_count, 0, "V15 不应写入默认行（is_custom=0 等价未自定义）");
-        assert_eq!(user_version(&conn), 15);
+        // V16：assets.concept_extracted_at 列已添加
+        let cols_assets = list_table_columns(&conn, "assets").unwrap();
+        assert!(
+            cols_assets.iter().any(|c| c == "concept_extracted_at"),
+            "V16 应已添加 concept_extracted_at 列"
+        );
+        assert_eq!(user_version(&conn), 16);
     }
 
-    /// 幂等：连续两次调用 run_migrations 不报错，版本仍为 15。
-    /// 关键覆盖：V12 的 ALTER TABLE 路径在第二次跑时被 PRAGMA table_info 守卫跳过，
+    /// 幂等：连续两次调用 run_migrations 不报错，版本仍为 16。
+    /// 关键覆盖：V12 / V16 的 ALTER TABLE 路径在第二次跑时被 PRAGMA table_info 守卫跳过，
     /// 不会触发 SQLite "duplicate column" 错误；V15 的 CREATE TABLE IF NOT EXISTS
     /// 在二次执行时同样应 no-op 推版本。
     #[test]
@@ -896,11 +938,32 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).expect("first run succeed");
         run_migrations(&conn).expect("second run should be idempotent");
-        assert_eq!(user_version(&conn), 15);
+        assert_eq!(user_version(&conn), 16);
         assert!(table_exists(&conn, "conversion_meta"));
         assert!(table_exists(&conn, "user_custom_prompt"));
         let cols = list_table_columns(&conn, "conversion_meta").unwrap();
         assert!(cols.iter().any(|c| c == "failure_code"));
+        // V16 列在幂等二跑后仍存在（且未触发 duplicate column）
+        let cols_assets = list_table_columns(&conn, "assets").unwrap();
+        assert!(cols_assets.iter().any(|c| c == "concept_extracted_at"));
+    }
+
+    /// V16 残缺路径：模拟生产 DB 上 user_version=15 但 concept_extracted_at 列
+    /// 已被外部手动加过的场景，V16 仍应幂等 no-op 推版本（不抛 duplicate column）。
+    #[test]
+    fn v16_idempotent_with_existing_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        // 先跑完 V1..V15（V16 尚未跑）
+        run_migrations(&conn).expect("first run to v16");
+        // 模拟"V15 已落地，concept_extracted_at 由外部脚本提前加过"的残缺状态：
+        // 把 user_version 倒退到 15。
+        conn.execute_batch("PRAGMA user_version = 15;").unwrap();
+        // 二次 run_migrations 触发 V16 dispatcher，PRAGMA table_info 守卫跳过 ADD COLUMN
+        run_migrations(&conn)
+            .expect("v16 should be idempotent against existing column");
+        assert_eq!(user_version(&conn), 16);
+        let cols_assets = list_table_columns(&conn, "assets").unwrap();
+        assert!(cols_assets.iter().any(|c| c == "concept_extracted_at"));
     }
 
     /// V15 残缺路径（R7 风险预案）：模拟生产 DB 上 user_version=14
@@ -915,7 +978,8 @@ mod tests {
         conn.execute_batch("PRAGMA user_version = 14;").unwrap();
         // 二次 run_migrations 触发 V15 dispatcher，CREATE TABLE IF NOT EXISTS 不报错。
         run_migrations(&conn).expect("v15 should be idempotent against existing table");
-        assert_eq!(user_version(&conn), 15);
+        // V15 跑完后版本被 V16 dispatcher 继续推进到 16（v15 与 v16 串联）。
+        assert_eq!(user_version(&conn), 16);
         assert!(table_exists(&conn, "user_custom_prompt"));
     }
 

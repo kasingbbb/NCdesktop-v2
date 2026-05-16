@@ -82,6 +82,8 @@ export function KnowledgeAssociationView() {
             processed: event.payload.processed,
             conceptsFound: event.payload.conceptsFound,
             status: event.payload.status,
+            // task_perf_02 AC-1：后端错误态 payload 透传 error 文案
+            error: event.payload.error ?? null,
           });
         }
       }
@@ -99,9 +101,13 @@ export function KnowledgeAssociationView() {
 
   // ── 处理「开始扫描」 ─────────────────────────────────────────────────────
 
-  const handleStartScan = (force = false) => {
+  /**
+   * task_perf_02 AC-3：本期"重新扫描"按钮总是强制全量重扫，保持既有
+   * 用户体验。增量扫描（forceFull=false）的 UI 入口（双按钮）放到 P2。
+   */
+  const handleStartScan = (forceFull = true) => {
     setScanStarted(true);
-    void startExtraction(libraryId, force);
+    void startExtraction(libraryId, forceFull);
   };
 
   const handleEnterUnderstanding = (conceptId: string) => {
@@ -206,27 +212,35 @@ export function KnowledgeAssociationView() {
             仅显示关联
           </button>
 
-          {/* 重新扫描 */}
+          {/* 重新扫描（task_perf_02 AC-2：running 时 disabled + 文案"扫描中…" + title） */}
           <button
             type="button"
             disabled={isExtracting}
+            aria-disabled={isExtracting}
             onClick={() => handleStartScan(true)}
+            title={
+              isExtracting
+                ? "已有扫描任务在执行，请等待完成"
+                : "重新全量扫描所有文档"
+            }
+            data-testid="knowledge-assoc-rescan-button"
             className="flex items-center gap-[var(--space-1)] px-[var(--space-3)] py-[var(--space-1)] rounded-[var(--radius-md)] text-[var(--text-xs)] transition-colors"
             style={{
               background: "var(--surface-secondary)",
               border: "1px solid var(--border-primary)",
               color: "var(--text-secondary)",
               opacity: isExtracting ? 0.5 : 1,
+              cursor: isExtracting ? "not-allowed" : "pointer",
             }}
           >
             <RefreshCw size={12} className={isExtracting ? "animate-spin" : ""} />
-            重新扫描
+            {isExtracting ? "扫描中…" : "重新扫描"}
           </button>
         </div>
       </div>
 
-      {/* ── 提取进度条 ── */}
-      {isExtracting && extractionProgress && (
+      {/* ── 提取进度条（task_perf_02 AC-1：running/completed/error 均显示）── */}
+      {extractionProgress && (
         <ExtractionProgressBar progress={extractionProgress} />
       )}
 
@@ -340,6 +354,17 @@ function EmptyState({ onStartScan }: { onStartScan: () => void }) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 子组件：提取进度条
+//
+// task_perf_02 AC-1：5 状态推导
+//   - error      : status === "error"
+//   - completed  : status === "completed"
+//   - starting   : status === "running" && processed === 0 && totalAssets > 0
+//   - running    : status === "running" && processed > 0
+//   - empty      : 其他（status === "running" && totalAssets === 0，尚未收到首份
+//                  payload）—— 也按 starting 处理但预估分钟数显示为占位"--"
+//
+// "启动中"状态用 Tailwind `animate-pulse`（NCdesktop tailwind 默认含），不引入
+// 新依赖；进度条 width=0 但容器有脉冲提示，消除"卡死"错觉。
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ExtractionProgressBar({ progress }: { progress: ExtractionProgress }) {
@@ -348,28 +373,124 @@ function ExtractionProgressBar({ progress }: { progress: ExtractionProgress }) {
       ? Math.round((progress.processed / progress.totalAssets) * 100)
       : 0;
 
+  const isError = progress.status === "error";
+  const isCompleted = progress.status === "completed";
+  const isStarting =
+    progress.status === "running" &&
+    progress.processed === 0 &&
+    progress.totalAssets > 0;
+  const isPreboot =
+    progress.status === "running" &&
+    progress.totalAssets === 0; // 尚未收到首条进度 payload
+
+  // 预估全量分钟数：每篇 ~60s，4 路并发
+  const etaMinutes =
+    progress.totalAssets > 0
+      ? Math.ceil((progress.totalAssets * 60) / 4 / 60)
+      : null;
+
+  // 主文案
+  let primary: string;
+  if (isError) {
+    primary = `扫描出错：${progress.error || "未知错误"}`;
+  } else if (isCompleted) {
+    primary = `扫描完成 · 共发现 ${progress.conceptsFound} 个概念`;
+  } else if (isStarting || isPreboot) {
+    primary = "正在处理首批文档（每篇约 60 秒）…";
+  } else {
+    primary = `已处理 ${progress.processed}/${progress.totalAssets} 个文档 · 发现 ${progress.conceptsFound} 个概念`;
+  }
+
+  // 副文案：启动中显示预估总耗时；完成态不显示；错误态不显示
+  let secondary: string | null = null;
+  if (isStarting && etaMinutes !== null) {
+    secondary = `预估全量约 ${etaMinutes} 分钟（4 路并发）`;
+  } else if (isPreboot) {
+    secondary = "正在准备文档列表…";
+  } else if (!isError && !isCompleted && !isStarting) {
+    // 进行中：副文案展示 ETA（剩余文档 / 4 * 60s）
+    const remaining = Math.max(progress.totalAssets - progress.processed, 0);
+    if (remaining > 0) {
+      const remainingMin = Math.ceil((remaining * 60) / 4 / 60);
+      secondary = `预计还需约 ${remainingMin} 分钟`;
+    }
+  }
+
+  // 视觉态：错误用红，完成用 success，其他维持品牌色
+  const accent = isError
+    ? "rgba(239,68,68,0.9)"
+    : isCompleted
+      ? "var(--brand-navy)"
+      : "var(--brand-navy)";
+
+  const trackBg = isError
+    ? "rgba(239,68,68,0.15)"
+    : "var(--surface-tertiary)";
+
+  // 启动中的容器加 animate-pulse；其他态不加
+  const containerExtra = isStarting || isPreboot ? "animate-pulse" : "";
+
   return (
     <div
-      className="flex-shrink-0 px-[var(--space-4)] py-[var(--space-2)] border-b space-y-[var(--space-1)]"
-      style={{ borderColor: "var(--border-primary)", background: "var(--surface-secondary)" }}
+      data-testid="extraction-progress-bar"
+      data-status={progress.status}
+      data-phase={
+        isError
+          ? "error"
+          : isCompleted
+            ? "completed"
+            : isStarting
+              ? "starting"
+              : isPreboot
+                ? "preboot"
+                : "running"
+      }
+      className={`flex-shrink-0 px-[var(--space-4)] py-[var(--space-2)] border-b space-y-[var(--space-1)] ${containerExtra}`}
+      style={{
+        borderColor: isError ? "rgba(239,68,68,0.3)" : "var(--border-primary)",
+        background: isError ? "rgba(239,68,68,0.06)" : "var(--surface-secondary)",
+      }}
     >
-      <div className="flex items-center justify-between">
-        <span className="text-[var(--text-xs)]" style={{ color: "var(--text-secondary)" }}>
-          正在扫描文档…
+      <div className="flex items-center justify-between gap-[var(--space-2)]">
+        <span
+          className="text-[var(--text-xs)] font-medium"
+          style={{
+            color: isError
+              ? "rgba(239,68,68,0.95)"
+              : isCompleted
+                ? "var(--text-primary)"
+                : "var(--text-secondary)",
+          }}
+        >
+          {primary}
         </span>
-        <span className="text-[var(--text-xs)]" style={{ color: "var(--text-tertiary)" }}>
-          已处理 {progress.processed}/{progress.totalAssets} 个文档 · 发现 {progress.conceptsFound} 个概念
-        </span>
+        {secondary && (
+          <span
+            className="text-[var(--text-xs)]"
+            style={{ color: "var(--text-tertiary)" }}
+          >
+            {secondary}
+          </span>
+        )}
       </div>
-      <div
-        className="h-1.5 rounded-full overflow-hidden"
-        style={{ background: "var(--surface-tertiary)" }}
-      >
+      {!isCompleted && !isError && (
         <div
-          className="h-full rounded-full"
-          style={{ width: `${pct}%`, background: "var(--brand-navy)", transition: "all var(--duration-normal)" }}
-        />
-      </div>
+          className="h-1.5 rounded-full overflow-hidden"
+          style={{ background: trackBg }}
+        >
+          <div
+            className="h-full rounded-full"
+            style={{
+              width: `${isStarting || isPreboot ? 100 : pct}%`,
+              background: accent,
+              transition: "all var(--duration-normal)",
+              // 启动中：宽度满但用半透明 + pulse（来自父容器 animate-pulse），
+              // 视觉效果近似"扫描中"指示器，避免 0% 空白条带来的"卡死"错觉
+              opacity: isStarting || isPreboot ? 0.45 : 1,
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }

@@ -1,20 +1,29 @@
 /**
- * KnowledgeAssociationView — v1.3 task_009 fix 单测覆盖
+ * KnowledgeAssociationView — v1.3 task_009 fix + concept_rescan_perf_v1
+ * task_perf_02_frontend 单测覆盖
  *
  * 覆盖：
- *   - AC-1 toggle 默认 aria-checked="true"
- *   - AC-7 toggle role="switch"
- *   - toggle 点击切换 aria-checked
- *   - AC-5/6 合并按钮 disabled + data-merge-id 非空（在 ConceptList 中渲染）
- *
- * 注：实际过滤逻辑、置顶 + 浅琥珀条延后到 v1.4。本测试只覆盖"占位完整闭环"。
+ *   - v1.3 task_009：toggle / 合并按钮占位
+ *   - task_perf_02 AC-1：5 状态进度条（启动中 / 进行中 / 完成 / 错误）
+ *   - task_perf_02 AC-2：重新扫描按钮 running 时 disabled + aria-disabled + 文案
+ *   - task_perf_02 AC-3：IPC 调用透传 forceFull
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 
 // mock Tauri event listen（KnowledgeAssociationView 用它监听 extraction-progress）
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
+}));
+
+// mock Tauri invoke（task_perf_02 AC-3：验证 forceFull 透传）
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn().mockResolvedValue({
+    totalAssets: 0,
+    processed: 0,
+    conceptsFound: 0,
+    status: "completed",
+  }),
 }));
 
 // mock 子组件：ConceptList 渲染真实合并按钮以便断言；ConceptDetailPanel 占位
@@ -116,6 +125,207 @@ describe("KnowledgeAssociationView — v1.3 task_009 占位闭环", () => {
       expect(btn.textContent).toMatch(/合并/);
       expect(btn.getAttribute("data-merge-id")).toBeTruthy();
       expect(btn.getAttribute("title")).toBe("v1.4 合并 modal 待开");
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// concept_rescan_perf_v1 / task_perf_02_frontend
+// AC-1：5 状态进度条
+// AC-2：按钮 running 态
+// AC-3：IPC forceFull 透传
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("KnowledgeAssociationView — task_perf_02 进度条 5 状态", () => {
+  it("AC-1 启动中：processed=0 且 totalAssets>0 时显示脉冲 + '正在处理首批文档' + 预估分钟数", () => {
+    useKnowledgeStore.setState({
+      extractionProgress: {
+        totalAssets: 87,
+        processed: 0,
+        conceptsFound: 0,
+        status: "running",
+      },
+    });
+    render(<KnowledgeAssociationView />);
+    const bar = screen.getByTestId("extraction-progress-bar");
+    expect(bar.getAttribute("data-phase")).toBe("starting");
+    // 容器加 animate-pulse 类名
+    expect(bar.className).toMatch(/animate-pulse/);
+    expect(bar.textContent).toMatch(/正在处理首批文档/);
+    expect(bar.textContent).toMatch(/每篇约 60 秒/);
+    // 87 文档，每篇 60 秒，4 路并发 → Math.ceil(87 * 60 / 4 / 60) = 22 分钟
+    expect(bar.textContent).toMatch(/预估全量约 22 分钟/);
+    expect(bar.textContent).toMatch(/4 路并发/);
+  });
+
+  it("AC-1 进行中：processed>0 显示真值进度 + 已发现概念数", () => {
+    useKnowledgeStore.setState({
+      extractionProgress: {
+        totalAssets: 87,
+        processed: 12,
+        conceptsFound: 38,
+        status: "running",
+      },
+    });
+    render(<KnowledgeAssociationView />);
+    const bar = screen.getByTestId("extraction-progress-bar");
+    expect(bar.getAttribute("data-phase")).toBe("running");
+    expect(bar.className).not.toMatch(/animate-pulse/);
+    expect(bar.textContent).toMatch(/已处理 12\/87 个文档/);
+    expect(bar.textContent).toMatch(/发现 38 个概念/);
+  });
+
+  it("AC-1 完成：status=completed 显示 '扫描完成 · 共发现 N 个概念'，不再显示进度条轨道", () => {
+    useKnowledgeStore.setState({
+      extractionProgress: {
+        totalAssets: 87,
+        processed: 87,
+        conceptsFound: 42,
+        status: "completed",
+      },
+    });
+    const { container } = render(<KnowledgeAssociationView />);
+    const bar = screen.getByTestId("extraction-progress-bar");
+    expect(bar.getAttribute("data-phase")).toBe("completed");
+    expect(bar.textContent).toMatch(/扫描完成/);
+    expect(bar.textContent).toMatch(/共发现 42 个概念/);
+    // 完成态不再渲染进度轨道（仅文案通知）
+    const track = container.querySelector(
+      '[data-testid="extraction-progress-bar"] .h-1\\.5'
+    );
+    expect(track).toBeNull();
+  });
+
+  it("AC-1 错误：status=error 显示 '扫描出错：{error}' + 红色提示", () => {
+    useKnowledgeStore.setState({
+      extractionProgress: {
+        totalAssets: 0,
+        processed: 0,
+        conceptsFound: 0,
+        status: "error",
+        error: "LLM 调用失败：超时",
+      },
+    });
+    render(<KnowledgeAssociationView />);
+    const bar = screen.getByTestId("extraction-progress-bar");
+    expect(bar.getAttribute("data-phase")).toBe("error");
+    expect(bar.textContent).toMatch(/扫描出错：LLM 调用失败：超时/);
+    // 错误态背景含红色 inline style
+    expect(bar.getAttribute("style") || "").toMatch(/239,\s*68,\s*68/);
+  });
+
+  it("AC-1 错误兜底：error 字段缺失时显示 '扫描出错：未知错误'", () => {
+    useKnowledgeStore.setState({
+      extractionProgress: {
+        totalAssets: 0,
+        processed: 0,
+        conceptsFound: 0,
+        status: "error",
+      },
+    });
+    render(<KnowledgeAssociationView />);
+    expect(screen.getByTestId("extraction-progress-bar").textContent).toMatch(
+      /扫描出错：未知错误/
+    );
+  });
+
+  it("AC-1 preboot：status=running 但 totalAssets=0 时显示 '正在准备文档列表…'", () => {
+    useKnowledgeStore.setState({
+      extractionProgress: {
+        totalAssets: 0,
+        processed: 0,
+        conceptsFound: 0,
+        status: "running",
+      },
+    });
+    render(<KnowledgeAssociationView />);
+    const bar = screen.getByTestId("extraction-progress-bar");
+    expect(bar.getAttribute("data-phase")).toBe("preboot");
+    expect(bar.className).toMatch(/animate-pulse/);
+    expect(bar.textContent).toMatch(/正在准备文档列表/);
+  });
+});
+
+describe("KnowledgeAssociationView — task_perf_02 AC-2 按钮态", () => {
+  it("running 时按钮 disabled + aria-disabled + 文案 '扫描中…' + title", () => {
+    useKnowledgeStore.setState({
+      extractionProgress: {
+        totalAssets: 87,
+        processed: 0,
+        conceptsFound: 0,
+        status: "running",
+      },
+    });
+    render(<KnowledgeAssociationView />);
+    const btn = screen.getByTestId("knowledge-assoc-rescan-button") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.getAttribute("aria-disabled")).toBe("true");
+    expect(btn.textContent).toMatch(/扫描中…/);
+    expect(btn.getAttribute("title")).toBe("已有扫描任务在执行，请等待完成");
+  });
+
+  it("idle 时按钮可点击 + 文案 '重新扫描'", () => {
+    useKnowledgeStore.setState({ extractionProgress: null });
+    render(<KnowledgeAssociationView />);
+    const btn = screen.getByTestId("knowledge-assoc-rescan-button") as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    expect(btn.getAttribute("aria-disabled")).toBe("false");
+    expect(btn.textContent).toMatch(/重新扫描/);
+    expect(btn.textContent).not.toMatch(/扫描中…/);
+  });
+
+  it("completed 后按钮恢复可点击", () => {
+    useKnowledgeStore.setState({
+      extractionProgress: {
+        totalAssets: 87,
+        processed: 87,
+        conceptsFound: 42,
+        status: "completed",
+      },
+    });
+    render(<KnowledgeAssociationView />);
+    const btn = screen.getByTestId("knowledge-assoc-rescan-button") as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    expect(btn.textContent).toMatch(/重新扫描/);
+  });
+});
+
+describe("KnowledgeAssociationView — task_perf_02 AC-3 IPC forceFull 透传", () => {
+  it("点击重新扫描时，invoke 被以 forceFull=true 调用 start_concept_extraction", async () => {
+    // 还原 store 真实 startExtraction（前面的 beforeEach mock 掉了 startExtraction
+    // 之外的方法但 startExtraction 本身使用 store 原方法）
+    const { invoke } = await import("@tauri-apps/api/core");
+    const invokeMock = vi.mocked(invoke);
+    invokeMock.mockClear();
+    invokeMock.mockResolvedValue({
+      totalAssets: 0,
+      processed: 0,
+      conceptsFound: 0,
+      status: "completed",
+    });
+
+    // 取一份真实 store（含原 startExtraction）—— 把它 patch 回测试 store
+    useKnowledgeStore.setState({
+      startExtraction: INITIAL_KNOWLEDGE.startExtraction,
+      extractionProgress: null,
+    });
+
+    render(<KnowledgeAssociationView />);
+    const btn = screen.getByTestId("knowledge-assoc-rescan-button");
+
+    await act(async () => {
+      fireEvent.click(btn);
+      // 等待 startExtraction → cmd.extractConceptsForLibrary → invoke 进入 microtask
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(invokeMock).toHaveBeenCalled();
+    const [cmdName, payload] = invokeMock.mock.calls[0];
+    expect(cmdName).toBe("start_concept_extraction");
+    expect(payload).toEqual({
+      libraryId: "lib-1",
+      forceFull: true,
     });
   });
 });

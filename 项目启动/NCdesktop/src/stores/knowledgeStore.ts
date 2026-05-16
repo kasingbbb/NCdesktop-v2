@@ -59,8 +59,11 @@ interface KnowledgeStore {
   /** 删除概念 */
   deleteConcept: (conceptId: string) => Promise<void>;
 
-  /** 触发概念提取任务 */
-  startExtraction: (libraryId: string, force: boolean) => Promise<void>;
+  /**
+   * 触发概念提取任务。
+   * `forceFull` 语义见 `tauri-commands.ts::extractConceptsForLibrary`。
+   */
+  startExtraction: (libraryId: string, forceFull: boolean) => Promise<void>;
 
   /** 设置搜索词 */
   setSearchQuery: (q: string) => void;
@@ -176,7 +179,7 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => ({
 
   // ── startExtraction ───────────────────────────────────────────────────────
 
-  startExtraction: async (libraryId, force) => {
+  startExtraction: async (libraryId, forceFull) => {
     set({
       extractionProgress: {
         totalAssets: 0,
@@ -187,19 +190,23 @@ export const useKnowledgeStore = create<KnowledgeStore>((set, get) => ({
       error: null,
     });
     try {
-      const result = await cmd.extractConceptsForLibrary(libraryId, force);
+      const result = await cmd.extractConceptsForLibrary(libraryId, forceFull);
       set({ extractionProgress: result });
       // 提取完成后刷新概念列表
       await get().fetchConcepts(libraryId);
     } catch (e) {
+      // 错误态：除了 store.error 外，同步写入 extractionProgress.error，
+      // 进度条组件用它渲染"扫描出错：..."（task_perf_02 AC-1）
+      const msg = String(e);
       set({
         extractionProgress: {
           totalAssets: 0,
           processed: 0,
           conceptsFound: 0,
           status: "error",
+          error: msg,
         },
-        error: String(e),
+        error: msg,
       });
     }
   },

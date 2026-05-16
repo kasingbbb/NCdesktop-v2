@@ -598,13 +598,28 @@ export async function deleteConcept(conceptId: string): Promise<void> {
   return invoke("delete_concept", { conceptId });
 }
 
+/**
+ * 触发知识库概念提取。
+ *
+ * `forceFull` 语义（concept_rescan_perf_v1 / task_perf_02）：
+ *   - `true`  ⇒ 强制全量重扫（清空 concept_extracted_at 标记后重跑所有文档）
+ *   - `false` ⇒ 增量扫描，跳过已扫描文档（task_perf_01 后端落地后启用）
+ *
+ * 调用层使用 camelCase `forceFull`，Tauri runtime 自动序列化为后端的
+ * snake_case `force_full`。本期"重新扫描"按钮硬编码 `forceFull = true`
+ * 以保持既有用户体验；增量扫描的 UI 入口（双按钮）放到 P2。
+ *
+ * 后端 command 名为 task_perf_01 新注册的 `start_concept_extraction`
+ * （参数 `force_full: bool`）。旧 thin wrapper `extract_concepts_for_library`
+ * 参数是 `force: bool`，与本函数 `forceFull` 不匹配——故走新入口。
+ */
 export async function extractConceptsForLibrary(
   libraryId: string,
-  force: boolean
+  forceFull: boolean
 ): Promise<ConceptExtractionProgress> {
-  return invoke<ConceptExtractionProgress>("extract_concepts_for_library", {
+  return invoke<ConceptExtractionProgress>("start_concept_extraction", {
     libraryId,
-    force,
+    forceFull,
   });
 }
 

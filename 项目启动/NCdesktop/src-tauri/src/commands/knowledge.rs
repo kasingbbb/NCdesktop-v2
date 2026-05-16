@@ -12,9 +12,30 @@ use crate::llm::prompt_runtime::{
     assemble_messages_for_aggregation, assemble_messages_for_concept, inspect_messages_for_log,
     AggregationVars, ConceptVars,
 };
+use futures_util::stream::{self, StreamExt};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tauri::{Emitter, State};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// task_perf_01_backend 性能优化常量
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 概念抽取并发度（PRD 决策；不做配置化）。
+/// 调高需先评估 LLM 提供商 RPM / TPM 上限与 SQLite 写锁争用。
+const CONCEPT_EXTRACTION_CONCURRENCY: usize = 4;
+
+/// 单文档喂给 concept LLM 的最大字节数。
+/// 诊断报告：平均 62KB / 最大 970KB content 大部分是冗余 OCR/转写文本；
+/// 8 KiB 截断后单次 LLM 输入 token 从 ~15K 降到 ~2K，单文档延迟 58s → ~15s。
+const CONCEPT_CONTENT_MAX_BYTES: usize = 8192;
+
+/// 截断标记（中文，温和）—— 截断发生时追加到 user message 末尾，
+/// 告知 LLM 后文已省略，避免它对"残缺末尾"做奇怪推断。
+const CONCEPT_TRUNCATION_NOTE: &str =
+    "\n\n[Note: content truncated to 8 KiB for performance; first chunk shown above.]";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 进度结构体
@@ -79,17 +100,27 @@ pub fn delete_concept(
 // 异步：概念提取（后台任务，通过 Tauri event 推进度）
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// 扫描知识库所有素材，对每个素材调用 LLM 提取概念
+/// 扫描知识库所有素材，对每个素材调用 LLM 提取概念（task_perf_01 性能改造）。
 ///
-/// - force=true：重新处理所有素材；false：仅处理未提取过的（基于 concept 去重）
-/// - 进度通过 `notecapt/concept-extraction-progress` 事件推送
-/// - 完成后发送 `notecapt/concept-extraction-done`
+/// 改造要点：
+/// - **并发**：4 路 `buffer_unordered`，对应 `CONCEPT_EXTRACTION_CONCURRENCY`；
+///   单文档约 ~58s 串行变 ~22s 平均并发，content 截断到 8 KiB 后再降到 ~7-10min 全量。
+/// - **增量扫描**：`force_full=false` 时 SELECT WHERE `concept_extracted_at IS NULL`，
+///   `force_full=true` 时先 UPDATE 重置全库标记再全量扫描（用户 escape hatch）。
+///   `assets.concept_extracted_at` 由 V16 迁移落地。
+/// - **错误隔离**：单文档 chat_completion / parse 失败仅 `log::error!`，不终止 batch；
+///   失败文档不写 `concept_extracted_at`（下次增量自动重试）。
+/// - **进度**：`processed` / `concepts_found` 用 `AtomicUsize` 并发安全；
+///   每文档完成（成功/失败/跳过）均 emit `notecapt/concept-extraction-progress`。
+///
+/// IPC 名 `start_concept_extraction`（前端 task_perf_02 期望签名）。
+/// 旧 IPC 名 `extract_concepts_for_library` 保留为 thin wrapper（见同文件）。
 #[tauri::command]
-pub async fn extract_concepts_for_library(
+pub async fn start_concept_extraction(
     db: State<'_, Database>,
     app: tauri::AppHandle,
     library_id: String,
-    force: bool,
+    force_full: bool,
 ) -> Result<ExtractionProgress, String> {
     // 1. 读取 LLM 配置
     let client = {
@@ -97,20 +128,30 @@ pub async fn extract_concepts_for_library(
         LLMClient::from_db_or_env(&conn)?
     };
 
-    // 2. 查询需要处理的素材（通过 library_id → projects → assets）
+    // 2. force_full 时先重置整个 library 的 concept_extracted_at 标记（escape hatch）
+    if force_full {
+        let conn = db.conn.lock().map_err(|e| format!("数据库锁获取失败: {e}"))?;
+        reset_library_concept_extracted_at(&conn, &library_id)?;
+    }
+
+    // 3. 查询需要处理的素材：force_full=false 仅查 concept_extracted_at IS NULL
     let assets = {
         let conn = db.conn.lock().map_err(|e| format!("数据库锁获取失败: {e}"))?;
-        fetch_library_assets(&conn, &library_id)?
+        fetch_library_assets_for_extraction(&conn, &library_id, force_full)?
     };
 
     let total = assets.len();
-    let mut processed = 0usize;
-    let mut concepts_found = 0usize;
-    let mut skipped_incremental = 0usize;
+    // 并发安全计数器：buffer_unordered 闭包内 fetch_add 后用 Relaxed 读最新值 emit。
+    // emit_progress 走 app.emit（事件总线，本身线程安全），无需额外同步。
+    let processed = Arc::new(AtomicUsize::new(0));
+    let concepts_found = Arc::new(AtomicUsize::new(0));
+    let skipped_incremental = Arc::new(AtomicUsize::new(0));
 
-    emit_progress(&app, &library_id, total, processed, concepts_found, "running");
+    emit_progress(&app, &library_id, total, 0, 0, "running");
 
-    // 预加载所有已存在的概念（含 user_edited 标记，用于 F-9）
+    // 4. 预加载已存在的概念（含 user_edited 标记，用于 F-9）和 F-8 已处理 (asset, hash) 集合。
+    //    并发闭包内读取这两个快照（不变快照），写入 concepts 表时用 INSERT OR IGNORE +
+    //    重新 SELECT id 解决"两个并发闭包同时插入同名 concept"的竞争（concepts.UNIQUE(library_id, name)）。
     let existing_concepts = {
         let conn = db.conn.lock().map_err(|e| format!("数据库锁获取失败: {e}"))?;
         get_concepts_with_stats(&conn, &library_id)?
@@ -118,85 +159,170 @@ pub async fn extract_concepts_for_library(
             .map(|c| (c.name.clone(), (c.id.clone(), c.user_edited)))
             .collect::<std::collections::HashMap<_, _>>()
     };
-
-    // F-8 增量抽取：预加载已处理过的 (asset_id, content_hash) 集合
     let logged_pairs = {
         let conn = db.conn.lock().map_err(|e| format!("数据库锁获取失败: {e}"))?;
         crate::db::concepts_extraction_log::fetch_logged_pairs(&conn, &library_id)?
     };
 
-    for (asset_id, project_name, asset_name, content_snippet, content_hash) in &assets {
-        // 跳过内容为空的素材
-        if content_snippet.trim().is_empty() {
-            processed += 1;
-            continue;
-        }
+    // 5. 并发主循环：buffer_unordered(4)
+    // 闭包通过 `db: &State<Database>` 借用（State<'_, Database> 在 async fn 主帧中存活），
+    // 闭包返回 Result<(asset_id, concepts_inserted), String>。Err 仅 log，不抛 ?。
+    let stream_results = stream::iter(assets.into_iter())
+        .map(|(asset_id, project_name, asset_name, content_snippet, content_hash)| {
+            // 把闭包内需要的可 clone 数据各 clone 一份；&db 与 &client / &app 走 borrow 即可。
+            let library_id = library_id.clone();
+            let existing_concepts = &existing_concepts;
+            let logged_pairs = &logged_pairs;
+            let processed = Arc::clone(&processed);
+            let concepts_found = Arc::clone(&concepts_found);
+            let skipped_incremental = Arc::clone(&skipped_incremental);
+            let client = &client;
+            let db = &db;
+            let app = &app;
 
-        // F-8: 若 force=false 且此 (asset_id, hash) 已在日志中，则跳过
-        if !force {
-            if let Some(hash) = content_hash.as_ref() {
-                if logged_pairs.contains(&(asset_id.clone(), hash.clone())) {
-                    skipped_incremental += 1;
-                    processed += 1;
-                    emit_progress(&app, &library_id, total, processed, concepts_found, "running");
-                    continue;
+            async move {
+                // ─── 5.1 空内容跳过（不算失败，仅推进 processed）───
+                if content_snippet.trim().is_empty() {
+                    let p = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                    let cf = concepts_found.load(Ordering::Relaxed);
+                    emit_progress(app, &library_id, total, p, cf, "running");
+                    return Ok::<_, String>(());
                 }
-            }
-        }
 
-        // task_004 AC-2 改造：通过 prompt_runtime::assemble_messages_for_concept 组装
-        // messages，由此真正启用用户自定义 concept Prompt 与输出格式守卫
-        // （ADR-003 Layer A）。旧的 build_extraction_prompt + 内联 messages 已弃用。
-        let assembled = {
-            let conn = db.conn.lock().map_err(|e| format!("数据库锁获取失败: {e}"))?;
-            let msgs = assemble_messages_for_concept(
-                &conn,
-                ConceptVars {
-                    asset_name: asset_name.clone(),
-                    project_name: project_name.clone(),
-                    content: content_snippet.clone(),
-                },
-            );
-            match msgs {
-                Ok(m) => {
-                    let ctx = inspect_messages_for_log(&conn, "concept", &m);
-                    Some((m, ctx))
+                // ─── 5.2 F-8 增量去重（force_full=false 才生效）───
+                if !force_full {
+                    if let Some(hash) = content_hash.as_ref() {
+                        if logged_pairs.contains(&(asset_id.clone(), hash.clone())) {
+                            skipped_incremental.fetch_add(1, Ordering::Relaxed);
+                            let p = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                            let cf = concepts_found.load(Ordering::Relaxed);
+                            emit_progress(app, &library_id, total, p, cf, "running");
+                            return Ok(());
+                        }
+                    }
                 }
-                Err(e) => {
-                    log::warn!(
-                        "概念抽取 messages 组装失败，跳过素材 {}: {}",
-                        asset_id, e
+
+                // ─── 5.3 content 截断到 8 KiB（byte-safe UTF-8 边界）+ 拼 prompt ───
+                let (truncated_content, did_truncate) =
+                    truncate_content_for_concept(&content_snippet, CONCEPT_CONTENT_MAX_BYTES);
+
+                let assembled = {
+                    let conn = match db.conn.lock() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            log::error!(
+                                "concept extraction db lock failed for asset {asset_id}: {e}"
+                            );
+                            let p = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                            let cf = concepts_found.load(Ordering::Relaxed);
+                            emit_progress(app, &library_id, total, p, cf, "running");
+                            return Ok(());
+                        }
+                    };
+                    let msgs = assemble_messages_for_concept(
+                        &conn,
+                        ConceptVars {
+                            asset_name: asset_name.clone(),
+                            project_name: project_name.clone(),
+                            content: truncated_content,
+                        },
                     );
-                    None
-                }
-            }
-        };
+                    match msgs {
+                        Ok(mut m) => {
+                            // 截断发生时在最后一条 user message 末尾追加 truncated note
+                            if did_truncate {
+                                if let Some(user_msg) =
+                                    m.iter_mut().rev().find(|msg| msg.role == "user")
+                                {
+                                    user_msg.content.push_str(CONCEPT_TRUNCATION_NOTE);
+                                }
+                            }
+                            let ctx = inspect_messages_for_log(&conn, "concept", &m);
+                            Some((m, ctx))
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "概念抽取 messages 组装失败，跳过素材 {}: {}",
+                                asset_id, e
+                            );
+                            None
+                        }
+                    }
+                }; // 释放 DB 锁
 
-        let Some((messages, log_ctx)) = assembled else {
-            processed += 1;
-            emit_progress(&app, &library_id, total, processed, concepts_found, "running");
-            continue;
-        };
+                let Some((messages, log_ctx)) = assembled else {
+                    let p = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                    let cf = concepts_found.load(Ordering::Relaxed);
+                    emit_progress(app, &library_id, total, p, cf, "running");
+                    return Ok(());
+                };
 
-        log::info!(
-            "LLM call: module={} bytes={} user_overridden={}",
-            log_ctx.module,
-            log_ctx.total_bytes,
-            log_ctx.user_overridden
-        );
+                log::info!(
+                    "LLM call: module={} bytes={} user_overridden={}",
+                    log_ctx.module,
+                    log_ctx.total_bytes,
+                    log_ctx.user_overridden
+                );
 
-        // 调用 LLM，解析 JSON
-        if let Ok(response) = chat_completion(&client, messages).await {
-            if let Ok(extracted) = parse_extracted_concepts(&response) {
-                let conn = db.conn.lock().map_err(|e| format!("数据库锁获取失败: {e}"))?;
-                let now = chrono::Utc::now().to_rfc3339();
+                // ─── 5.4 LLM 调用（最耗时；锁已释放，4 路真正并发）───
+                let response = match chat_completion(client, messages).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // 错误隔离：仅 log，不抛；processed 推进但 conceptsFound 不变；
+                        // 不写 concept_extracted_at，下次增量自动重试。
+                        log::error!(
+                            "concept extraction failed for asset {asset_id}: {e}"
+                        );
+                        let p = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                        let cf = concepts_found.load(Ordering::Relaxed);
+                        emit_progress(app, &library_id, total, p, cf, "running");
+                        return Ok(());
+                    }
+                };
 
-                for ec in extracted {
-                    let concept_id: String =
-                        if let Some((existing_id, _user_edited)) = existing_concepts.get(&ec.name) {
+                let extracted = match parse_extracted_concepts(&response) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::error!(
+                            "concept extraction parse failed for asset {asset_id}: {e}"
+                        );
+                        let p = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                        let cf = concepts_found.load(Ordering::Relaxed);
+                        emit_progress(app, &library_id, total, p, cf, "running");
+                        return Ok(());
+                    }
+                };
+
+                // ─── 5.5 写入 concepts / cases / 标记 concept_extracted_at（短作用域抢锁）───
+                let mut local_concepts_count = 0usize;
+                {
+                    let conn = match db.conn.lock() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            log::error!(
+                                "concept extraction db write lock failed for asset {asset_id}: {e}"
+                            );
+                            let p = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                            let cf = concepts_found.load(Ordering::Relaxed);
+                            emit_progress(app, &library_id, total, p, cf, "running");
+                            return Ok(());
+                        }
+                    };
+                    let now = chrono::Utc::now().to_rfc3339();
+
+                    for ec in extracted {
+                        // 并发竞争解决：先查快照，命中则走 append；未命中尝试 INSERT OR IGNORE，
+                        // 然后用 (library_id, name) 重新 SELECT id（保证另一并发闭包先插入时仍能拿到 id）。
+                        let concept_id: String = if let Some((existing_id, _ue)) =
+                            existing_concepts.get(&ec.name)
+                        {
                             // F-9: user_edited 概念仅追加 source_asset_id + cases，
-                            // 绝不覆写 name/definition（当前分支本就不改 name/definition，保留行为）
-                            append_source_asset(&conn, existing_id, asset_id)?;
+                            // 绝不覆写 name/definition
+                            if let Err(e) = append_source_asset(&conn, existing_id, &asset_id) {
+                                log::warn!(
+                                    "append_source_asset 失败 asset={asset_id} concept={existing_id}: {e}"
+                                );
+                            }
                             existing_id.clone()
                         } else {
                             let new_id = uuid::Uuid::new_v4().to_string();
@@ -212,44 +338,90 @@ pub async fn extract_concepts_for_library(
                                 created_at: now.clone(),
                                 updated_at: now.clone(),
                             };
-                            insert_concept(&conn, &c)?;
-                            new_id
+                            // insert_concept 用 INSERT OR IGNORE；如另一并发闭包已抢先插入同名 concept，
+                            // 此处静默忽略，再重查实际 id 走 append 路径。
+                            let _ = insert_concept(&conn, &c);
+                            match conn.query_row(
+                                "SELECT id FROM concepts WHERE library_id = ?1 AND name = ?2",
+                                params![library_id, ec.name],
+                                |r| r.get::<_, String>(0),
+                            ) {
+                                Ok(id) => {
+                                    if id != new_id {
+                                        // 另一闭包先插入了，补一次 source_asset 追加
+                                        if let Err(e) =
+                                            append_source_asset(&conn, &id, &asset_id)
+                                        {
+                                            log::warn!(
+                                                "append_source_asset 兜底失败 asset={asset_id}: {e}"
+                                            );
+                                        }
+                                    }
+                                    id
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "concept 查询失败 lib={library_id} name={}: {e}",
+                                        ec.name
+                                    );
+                                    continue;
+                                }
+                            }
                         };
 
-                    // 插入案例摘录
-                    for excerpt in &ec.excerpts {
-                        let case = ConceptCase {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            concept_id: concept_id.clone(),
-                            title: format!("{} — {}", project_name, asset_name),
-                            excerpt: excerpt.clone(),
-                            source_asset_id: Some(asset_id.clone()),
-                            source_location: None,
-                            relevance_note: None,
-                        };
-                        let _ = insert_case(&conn, &case); // 忽略重复
+                        // 插入案例摘录（重复时忽略）
+                        for excerpt in &ec.excerpts {
+                            let case = ConceptCase {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                concept_id: concept_id.clone(),
+                                title: format!("{} — {}", project_name, asset_name),
+                                excerpt: excerpt.clone(),
+                                source_asset_id: Some(asset_id.clone()),
+                                source_location: None,
+                                relevance_note: None,
+                            };
+                            let _ = insert_case(&conn, &case);
+                        }
+
+                        local_concepts_count += 1;
                     }
 
-                    concepts_found += 1;
-                }
+                    // F-8 旧日志（保留，content_hash 维度）+ V16 新标记（asset_id 维度）双写
+                    if let Some(hash) = content_hash.as_ref() {
+                        let _ = crate::db::concepts_extraction_log::insert(
+                            &conn,
+                            &library_id,
+                            &asset_id,
+                            hash,
+                        );
+                    }
+                    if let Err(e) = mark_asset_concept_extracted(&conn, &asset_id) {
+                        log::warn!(
+                            "mark concept_extracted_at 失败 asset={asset_id}: {e}"
+                        );
+                    }
+                } // 释放 DB 锁
 
-                // F-8: 记录该 (library, asset, hash) 已处理，供下次增量跳过
-                if let Some(hash) = content_hash.as_ref() {
-                    let _ = crate::db::concepts_extraction_log::insert(
-                        &conn, &library_id, asset_id, hash,
-                    );
-                }
+                // ─── 5.6 推进 processed / concepts_found 并 emit ───
+                concepts_found.fetch_add(local_concepts_count, Ordering::Relaxed);
+                let p = processed.fetch_add(1, Ordering::Relaxed) + 1;
+                let cf = concepts_found.load(Ordering::Relaxed);
+                emit_progress(app, &library_id, total, p, cf, "running");
+                Ok(())
             }
-        }
+        })
+        .buffer_unordered(CONCEPT_EXTRACTION_CONCURRENCY);
 
-        processed += 1;
-        emit_progress(&app, &library_id, total, processed, concepts_found, "running");
-    }
+    // 驱动 stream 跑完所有并发任务（错误已在闭包内 log 吞掉，这里不会拿到 Err）
+    stream_results
+        .for_each(|_| async {})
+        .await;
 
-    if skipped_incremental > 0 {
+    let skipped = skipped_incremental.load(Ordering::Relaxed);
+    if skipped > 0 {
         log::info!(
-            "F-8 增量抽取：库 {} 跳过 {} 个已处理素材（force=false）",
-            library_id, skipped_incremental
+            "F-8 增量抽取：库 {} 跳过 {} 个已处理素材（force_full=false）",
+            library_id, skipped
         );
     }
 
@@ -265,18 +437,34 @@ pub async fn extract_concepts_for_library(
     }
 
     // 共现计算完成并释放连接锁后，再发送完成事件
+    let final_concepts_found = concepts_found.load(Ordering::Relaxed);
+    let final_processed = processed.load(Ordering::Relaxed);
     let _ = app.emit(
         "notecapt/concept-extraction-done",
-        serde_json::json!({ "libraryId": library_id, "conceptCount": concepts_found }),
+        serde_json::json!({ "libraryId": library_id, "conceptCount": final_concepts_found }),
     );
 
-    let final_progress = ExtractionProgress {
+    Ok(ExtractionProgress {
         total_assets: total,
-        processed,
-        concepts_found,
+        processed: final_processed,
+        concepts_found: final_concepts_found,
         status: "completed".to_string(),
-    };
-    Ok(final_progress)
+    })
+}
+
+/// 兼容旧 IPC 名 `extract_concepts_for_library`（参数 `force`）。
+///
+/// 前端 task_perf_02 完成后会切换到 `start_concept_extraction(library_id, force_full)`；
+/// 在切换前/混合发布期间，本 wrapper 让旧调用方仍能工作。
+/// 语义：旧 `force=true` 等价新 `force_full=true`（强制全量重扫）。
+#[tauri::command]
+pub async fn extract_concepts_for_library(
+    db: State<'_, Database>,
+    app: tauri::AppHandle,
+    library_id: String,
+    force: bool,
+) -> Result<ExtractionProgress, String> {
+    start_concept_extraction(db, app, library_id, force).await
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -415,31 +603,58 @@ fn emit_progress(
     );
 }
 
-/// 从 library → projects → assets 取得需要处理的素材列表
+/// 从 library → projects → assets 取得需要处理的素材列表（**旧函数**：全量，无增量过滤）。
+///
+/// 保留以防 fix 期间需要回退诊断；当前主路径走 `fetch_library_assets_for_extraction`。
 /// 返回 (asset_id, project_name, asset_name, content_snippet, content_hash_opt)
+#[allow(dead_code)]
 fn fetch_library_assets(
     conn: &rusqlite::Connection,
     library_id: &str,
 ) -> Result<Vec<(String, String, String, String, Option<String>)>, String> {
+    fetch_library_assets_for_extraction(conn, library_id, true)
+}
+
+/// task_perf_01 AC-5：支持增量过滤的素材查询。
+///
+/// - `force_full=true`：返回 library 内所有 assets（同 fetch_library_assets 旧行为）；
+///   调用方需在此之前调用 `reset_library_concept_extracted_at` 重置标记。
+/// - `force_full=false`：仅返回 `a.concept_extracted_at IS NULL` 的 assets（未处理或上次失败）。
+///
+/// 返回 (asset_id, project_name, asset_name, content_snippet, content_hash_opt)。
+/// content 字段沿用既有 COALESCE 链路（md_ec → ec → ai.summary → a.name），
+/// 保证零行为差异于既有 task_004 LLM 调用契约。
+fn fetch_library_assets_for_extraction(
+    conn: &rusqlite::Connection,
+    library_id: &str,
+    force_full: bool,
+) -> Result<Vec<(String, String, String, String, Option<String>)>, String> {
+    let incremental_filter = if force_full {
+        ""
+    } else {
+        " AND a.concept_extracted_at IS NULL"
+    };
+    let sql = format!(
+        "SELECT a.id, p.name, a.name,
+                COALESCE(md_ec.structured_md, md_ec.raw_text, ec.structured_md, ec.raw_text, ai.summary, a.name) as content,
+                COALESCE(md_ec.content_hash, ec.content_hash) as content_hash
+         FROM assets a
+         INNER JOIN projects p ON p.id = a.project_id AND p.library_id = ?1
+         LEFT JOIN assets md ON md.id = (
+             SELECT id FROM assets
+             WHERE source_asset_id = a.id AND asset_type = 'markdown'
+             ORDER BY imported_at DESC
+             LIMIT 1
+         )
+         LEFT JOIN extracted_content md_ec ON md_ec.asset_id = md.id AND md_ec.status = 'extracted'
+         LEFT JOIN extracted_content ec ON ec.asset_id = a.id AND ec.status = 'extracted'
+         LEFT JOIN ai_analyses ai ON ai.asset_id = a.id
+         WHERE (a.source_asset_id IS NULL OR a.asset_type != 'markdown'){incremental_filter}
+         ORDER BY a.imported_at DESC",
+    );
+
     let mut stmt = conn
-        .prepare(
-            "SELECT a.id, p.name, a.name,
-                    COALESCE(md_ec.structured_md, md_ec.raw_text, ec.structured_md, ec.raw_text, ai.summary, a.name) as content,
-                    COALESCE(md_ec.content_hash, ec.content_hash) as content_hash
-             FROM assets a
-             INNER JOIN projects p ON p.id = a.project_id AND p.library_id = ?1
-             LEFT JOIN assets md ON md.id = (
-                 SELECT id FROM assets
-                 WHERE source_asset_id = a.id AND asset_type = 'markdown'
-                 ORDER BY imported_at DESC
-                 LIMIT 1
-             )
-             LEFT JOIN extracted_content md_ec ON md_ec.asset_id = md.id AND md_ec.status = 'extracted'
-             LEFT JOIN extracted_content ec ON ec.asset_id = a.id AND ec.status = 'extracted'
-             LEFT JOIN ai_analyses ai ON ai.asset_id = a.id
-             WHERE a.source_asset_id IS NULL OR a.asset_type != 'markdown'
-             ORDER BY a.imported_at DESC",
-        )
+        .prepare(&sql)
         .map_err(|e| format!("查询素材失败: {e}"))?;
 
     let rows: Result<Vec<_>, _> = stmt
@@ -456,6 +671,59 @@ fn fetch_library_assets(
         .collect();
 
     rows.map_err(|e| format!("读取素材行失败: {e}"))
+}
+
+/// `force_full=true` 时清空整个 library 内 assets 的 concept_extracted_at 标记，
+/// 让后续 SELECT 命中全部素材（escape hatch 真相来源）。
+fn reset_library_concept_extracted_at(
+    conn: &rusqlite::Connection,
+    library_id: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE assets
+            SET concept_extracted_at = NULL
+          WHERE project_id IN (SELECT id FROM projects WHERE library_id = ?1)",
+        params![library_id],
+    )
+    .map_err(|e| format!("重置 concept_extracted_at 失败: {e}"))?;
+    Ok(())
+}
+
+/// 单文档抽取成功后标记 `assets.concept_extracted_at = datetime('now')`。
+/// 失败文档不调用此函数，下次增量自动重试。
+fn mark_asset_concept_extracted(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE assets SET concept_extracted_at = datetime('now') WHERE id = ?1",
+        params![asset_id],
+    )
+    .map_err(|e| format!("写入 concept_extracted_at 失败: {e}"))?;
+    Ok(())
+}
+
+/// task_perf_01 AC-3：byte-safe UTF-8 边界截断到指定字节数。
+///
+/// 返回 `(截断后字符串, 是否真截断)`。
+/// - 输入 `content.len() <= max_bytes`：原样返回 + truncated=false。
+/// - 输入 `content.len() > max_bytes`：从头取最长不超过 max_bytes 字节且不切碎多字节
+///   UTF-8 字符的前缀，返回 + truncated=true。
+///
+/// 不会在 ASCII / Unicode 字符中间切断。中文一字符 3 字节，emoji 通常 4 字节，
+/// `char_indices()` 给出每个字符的起始字节位置，take_while 取到最后一个完全装下的字符尾。
+fn truncate_content_for_concept(content: &str, max_bytes: usize) -> (String, bool) {
+    if content.len() <= max_bytes {
+        return (content.to_string(), false);
+    }
+    // 找出最后一个字符末尾 ≤ max_bytes 的切点（含该字符整体）
+    let cut = content
+        .char_indices()
+        .take_while(|(byte_start, ch)| byte_start + ch.len_utf8() <= max_bytes)
+        .map(|(byte_start, ch)| byte_start + ch.len_utf8())
+        .last()
+        .unwrap_or(0);
+    (content[..cut].to_string(), true)
 }
 
 
@@ -885,5 +1153,338 @@ mod tests {
     fn build_cases_block_empty_cases_yields_empty_string() {
         let block = build_cases_block(&[]);
         assert!(block.is_empty());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // task_perf_01_backend AC-3：truncate_content_for_concept byte-safe 截断
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// 输入 < CONCEPT_CONTENT_MAX_BYTES：原样返回，truncated=false。
+    #[test]
+    fn truncate_short_content_returns_original_and_false() {
+        let content = "hello world";
+        let (out, did) = truncate_content_for_concept(content, CONCEPT_CONTENT_MAX_BYTES);
+        assert_eq!(out, "hello world");
+        assert!(!did, "短内容不应被标记截断");
+    }
+
+    /// 输入 > 8 KiB：返回字节长度 ≤ 8192 + truncated=true。
+    #[test]
+    fn truncate_long_content_bounded_by_max_bytes_and_true() {
+        let content: String = "a".repeat(20_000); // ASCII 20K
+        let (out, did) = truncate_content_for_concept(&content, CONCEPT_CONTENT_MAX_BYTES);
+        assert!(did, "超长内容必须标记截断");
+        assert!(
+            out.len() <= CONCEPT_CONTENT_MAX_BYTES,
+            "截断后字节长度必须 ≤ {} 实际 {}",
+            CONCEPT_CONTENT_MAX_BYTES,
+            out.len()
+        );
+        assert_eq!(out.len(), CONCEPT_CONTENT_MAX_BYTES, "ASCII 应该刚好打满 8192");
+    }
+
+    /// 中文 / emoji 多字节 UTF-8 边界不切坏：构造一段刚好让"完整字符末尾"跨越 max_bytes 的输入，
+    /// 验证返回字符串仍是合法 UTF-8（rust String 类型本身保证；额外断言长度 < max_bytes 而非 = max_bytes
+    /// 因为不能切碎多字节字符，会留 1-2 字节空白）。
+    #[test]
+    fn truncate_respects_utf8_char_boundary_for_cjk() {
+        // 中文一字符 3 字节；2735 个汉字 = 8205 字节，恰好越过 8192 边界
+        let content: String = "中".repeat(2735);
+        assert!(content.len() > CONCEPT_CONTENT_MAX_BYTES);
+
+        let (out, did) = truncate_content_for_concept(&content, CONCEPT_CONTENT_MAX_BYTES);
+        assert!(did, "超长 CJK 内容必须标记截断");
+        // 1. 字节长度必须 ≤ 8192
+        assert!(
+            out.len() <= CONCEPT_CONTENT_MAX_BYTES,
+            "字节长度 {} 必须 ≤ {}",
+            out.len(),
+            CONCEPT_CONTENT_MAX_BYTES
+        );
+        // 2. 字节长度必须是 3 的倍数（每个中文 3 字节，未切碎）
+        assert_eq!(out.len() % 3, 0, "CJK 截断后字节长度应为 3 倍数（无半字符）");
+        // 3. 8192 % 3 = 2，所以理论上 8190 字节最大（2730 个完整字符）
+        assert_eq!(out.len(), 8190, "8192 / 3 = 2730 个完整汉字 × 3 = 8190 字节");
+        // 4. 内容应全部为"中"字符
+        assert!(out.chars().all(|c| c == '中'));
+    }
+
+    /// emoji 4 字节边界：构造刚好让 emoji 末尾跨越 max_bytes 的输入。
+    #[test]
+    fn truncate_respects_utf8_char_boundary_for_emoji() {
+        // 🎉 是 4 字节 emoji；2049 个 = 8196 字节，越过 8192
+        let content: String = "🎉".repeat(2049);
+        assert!(content.len() > CONCEPT_CONTENT_MAX_BYTES);
+
+        let (out, did) = truncate_content_for_concept(&content, CONCEPT_CONTENT_MAX_BYTES);
+        assert!(did);
+        assert!(out.len() <= CONCEPT_CONTENT_MAX_BYTES);
+        // 每个 emoji 4 字节，8192 / 4 = 2048 个完整 emoji × 4 = 8192 字节（刚好打满）
+        assert_eq!(out.len() % 4, 0);
+        assert_eq!(out.len(), 8192);
+    }
+
+    /// 空字符串：边界 case，不应 panic。
+    #[test]
+    fn truncate_empty_content_returns_empty_and_false() {
+        let (out, did) = truncate_content_for_concept("", CONCEPT_CONTENT_MAX_BYTES);
+        assert_eq!(out, "");
+        assert!(!did);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // task_perf_01_backend AC-5：增量扫描 fetch_library_assets_for_extraction
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// 测试 helper：建一个最小的 library + project + 三个 assets。
+    /// 返回 (lib_id, [(asset_id, name)]) 供测试使用。
+    fn seed_library_with_assets(conn: &Connection, n_assets: usize) -> (String, Vec<String>) {
+        let lib_id = "lib_test".to_string();
+        let proj_id = "proj_test".to_string();
+        conn.execute_batch(&format!(
+            "INSERT INTO libraries (id, name, root_path) VALUES ('{}', 'lib', '/tmp/lib');
+             INSERT INTO projects (id, library_id, name) VALUES ('{}', '{}', 'p');",
+            lib_id, proj_id, lib_id
+        ))
+        .unwrap();
+
+        let mut asset_ids = Vec::with_capacity(n_assets);
+        for i in 0..n_assets {
+            let aid = format!("asset_{}", i);
+            conn.execute(
+                "INSERT INTO assets (id, project_id, asset_type, name, file_path)
+                 VALUES (?1, ?2, 'document', ?3, ?4)",
+                rusqlite::params![
+                    aid,
+                    proj_id,
+                    format!("doc_{}.pdf", i),
+                    format!("/tmp/doc_{}.pdf", i)
+                ],
+            )
+            .unwrap();
+            asset_ids.push(aid);
+        }
+        (lib_id, asset_ids)
+    }
+
+    /// AC-5-①：增量 mode（force_full=false）只返回 concept_extracted_at IS NULL 的素材。
+    #[test]
+    fn fetch_assets_incremental_skips_already_processed() {
+        let conn = fresh_conn();
+        let (lib, assets) = seed_library_with_assets(&conn, 3);
+
+        // 标记 asset_0 / asset_2 为已处理
+        for aid in &[&assets[0], &assets[2]] {
+            conn.execute(
+                "UPDATE assets SET concept_extracted_at = ?1 WHERE id = ?2",
+                rusqlite::params!["2026-05-16T01:00:00Z", aid],
+            )
+            .unwrap();
+        }
+
+        let incremental = fetch_library_assets_for_extraction(&conn, &lib, false).unwrap();
+        assert_eq!(incremental.len(), 1, "增量应只返回未处理的 1 个素材");
+        assert_eq!(incremental[0].0, assets[1], "应返回 asset_1");
+
+        let full = fetch_library_assets_for_extraction(&conn, &lib, true).unwrap();
+        assert_eq!(full.len(), 3, "force_full=true 应返回全部 3 个素材");
+    }
+
+    /// AC-5-②：reset_library_concept_extracted_at 清空标记后，
+    /// 增量查询返回全量（force_full=true 的实际效果）。
+    #[test]
+    fn reset_library_concept_extracted_at_makes_all_pending() {
+        let conn = fresh_conn();
+        let (lib, assets) = seed_library_with_assets(&conn, 3);
+
+        // 全部标记已处理
+        for aid in &assets {
+            conn.execute(
+                "UPDATE assets SET concept_extracted_at = ?1 WHERE id = ?2",
+                rusqlite::params!["2026-05-16T01:00:00Z", aid],
+            )
+            .unwrap();
+        }
+        let before = fetch_library_assets_for_extraction(&conn, &lib, false).unwrap();
+        assert_eq!(before.len(), 0);
+
+        reset_library_concept_extracted_at(&conn, &lib).unwrap();
+
+        let after = fetch_library_assets_for_extraction(&conn, &lib, false).unwrap();
+        assert_eq!(after.len(), 3, "reset 后增量查询应返回全部");
+    }
+
+    /// AC-5-③：mark_asset_concept_extracted 写入 NOT NULL，下次增量自动跳过。
+    /// 与 AC-4 错误隔离配合：失败素材的 concept_extracted_at 保持 NULL，下次增量会重试。
+    #[test]
+    fn mark_asset_concept_extracted_sets_timestamp_and_skips_next_incremental() {
+        let conn = fresh_conn();
+        let (lib, assets) = seed_library_with_assets(&conn, 2);
+
+        // 模拟"asset_0 成功 → mark；asset_1 失败 → 不 mark"
+        mark_asset_concept_extracted(&conn, &assets[0]).unwrap();
+
+        let ts: Option<String> = conn
+            .query_row(
+                "SELECT concept_extracted_at FROM assets WHERE id = ?1",
+                rusqlite::params![assets[0]],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(ts.is_some(), "asset_0 应有 concept_extracted_at 时间戳");
+
+        let ts_null: Option<String> = conn
+            .query_row(
+                "SELECT concept_extracted_at FROM assets WHERE id = ?1",
+                rusqlite::params![assets[1]],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(ts_null.is_none(), "失败的 asset_1 应保持 NULL（下次增量重试）");
+
+        let pending = fetch_library_assets_for_extraction(&conn, &lib, false).unwrap();
+        assert_eq!(pending.len(), 1, "增量查询应只剩 asset_1（失败者）");
+        assert_eq!(pending[0].0, assets[1]);
+    }
+
+    /// AC-6 并发安全：AtomicUsize 计数器在并发 fetch_add 后总和等于操作次数。
+    /// （buffer_unordered 本身的并发正确性由 futures-util 保证；
+    /// 这里验证我们对 Atomic 的使用模式 — fetch_add(1) + load 取最新值用于 emit — 正确。）
+    ///
+    /// 用 std::thread 模拟并发；与生产代码用的是同一个 AtomicUsize Ordering::Relaxed 语义。
+    #[test]
+    fn atomic_counter_concurrent_increments_yield_correct_total() {
+        let processed = Arc::new(AtomicUsize::new(0));
+        let total_tasks = 100;
+
+        let handles: Vec<_> = (0..total_tasks)
+            .map(|_| {
+                let p = Arc::clone(&processed);
+                std::thread::spawn(move || {
+                    // 模拟"完成一个文档" — fetch_add 返回旧值
+                    p.fetch_add(1, Ordering::Relaxed);
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(
+            processed.load(Ordering::Relaxed),
+            total_tasks,
+            "100 个并发 fetch_add 后总和应等于 100"
+        );
+    }
+
+    /// AC-2 + AC-4 + AC-6 端到端：用 tauri::async_runtime::block_on 跑一个
+    /// `stream::iter().map().buffer_unordered(4)` mini pipeline，模拟"4 个任务，
+    /// 其中第 2 个失败"。验证：① 4 个任务都被驱动 ② 失败的不增加 concepts_found
+    /// ③ processed 计数 == 4。
+    #[test]
+    fn buffer_unordered_with_simulated_failures_isolates_errors() {
+        let processed = Arc::new(AtomicUsize::new(0));
+        let concepts_found = Arc::new(AtomicUsize::new(0));
+        let total = 4usize;
+
+        tauri::async_runtime::block_on(async {
+            let processed = Arc::clone(&processed);
+            let concepts_found = Arc::clone(&concepts_found);
+            stream::iter(0..total)
+                .map(|i| {
+                    let processed = Arc::clone(&processed);
+                    let concepts_found = Arc::clone(&concepts_found);
+                    async move {
+                        if i == 1 {
+                            // 失败路径：仅 log（错误隔离），processed 推进，concepts_found 不变
+                            log::error!("simulated failure for asset {}", i);
+                        } else {
+                            // 成功路径：每个产出 3 个 concept
+                            concepts_found.fetch_add(3, Ordering::Relaxed);
+                        }
+                        processed.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+                .buffer_unordered(CONCEPT_EXTRACTION_CONCURRENCY)
+                .for_each(|_| async {})
+                .await;
+        });
+        assert_eq!(
+            processed.load(Ordering::Relaxed),
+            total,
+            "4 个任务均应推进 processed（含失败者）"
+        );
+        assert_eq!(
+            concepts_found.load(Ordering::Relaxed),
+            3 * 3,
+            "3 个成功任务 × 3 concept = 9（失败者贡献 0）"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // task_perf_01_backend：buffer_unordered + truncate + 错误隔离 端到端验证
+    // （集成测试用 mocked LLM 通过的话需注入 client；本地仅验证可编译路径，
+    //  完整 LLM mock 走 user_prompt_e2e。这里聚焦闭包逻辑组成正确性。）
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// 验证 truncate + note 拼接：截断时 user message 末尾追加 truncation note；
+    /// 不截断时不追加。
+    #[test]
+    fn truncated_content_appends_note_to_user_message() {
+        let conn = fresh_conn();
+        let long_content = "a".repeat(20_000);
+        let (truncated, did) =
+            truncate_content_for_concept(&long_content, CONCEPT_CONTENT_MAX_BYTES);
+        assert!(did);
+
+        // 模拟主流程：assemble + 条件追加 note
+        let mut messages = assemble_messages_for_concept(
+            &conn,
+            ConceptVars {
+                asset_name: "doc.pdf".into(),
+                project_name: "p".into(),
+                content: truncated,
+            },
+        )
+        .unwrap();
+        if did {
+            if let Some(user_msg) = messages.iter_mut().rev().find(|m| m.role == "user") {
+                user_msg.content.push_str(CONCEPT_TRUNCATION_NOTE);
+            }
+        }
+        let user_msg = messages.iter().rev().find(|m| m.role == "user").unwrap();
+        assert!(
+            user_msg.content.contains("truncated to 8 KiB"),
+            "user message 必须含 truncation note"
+        );
+    }
+
+    /// 不截断路径：短内容时不追加 note。
+    #[test]
+    fn short_content_does_not_append_truncation_note() {
+        let conn = fresh_conn();
+        let short_content = "hello";
+        let (out, did) = truncate_content_for_concept(short_content, CONCEPT_CONTENT_MAX_BYTES);
+        assert!(!did);
+
+        let mut messages = assemble_messages_for_concept(
+            &conn,
+            ConceptVars {
+                asset_name: "doc.pdf".into(),
+                project_name: "p".into(),
+                content: out,
+            },
+        )
+        .unwrap();
+        if did {
+            if let Some(user_msg) = messages.iter_mut().rev().find(|m| m.role == "user") {
+                user_msg.content.push_str(CONCEPT_TRUNCATION_NOTE);
+            }
+        }
+        let user_msg = messages.iter().rev().find(|m| m.role == "user").unwrap();
+        assert!(
+            !user_msg.content.contains("truncated to 8 KiB"),
+            "短内容路径不应追加 truncation note"
+        );
     }
 }
